@@ -1,0 +1,127 @@
+#!/usr/bin/env python3
+"""picoflash — flash an RP2040 in its bootloader through PICOBOOT (the
+bootloader's vendor USB interface, RP2040 datasheet 2.8.5) instead of copying
+to the RPI-RP2 drive: for when macOS doesn't mount the drive. Needs libusb
+(Homebrew's); opens only the RP2040 bootloader, VID 2e8a PID 0003.
+
+    tools/picoflash file.uf2    # erase + write the UF2's sectors, verify, reboot into it
+    tools/picoflash --reboot    # just leave the bootloader (boot from flash)
+
+Put the badge in its bootloader first: python3 tools/reboot2boot.py.
+"""
+import ctypes, ctypes.util, struct, sys, time
+
+UF2_MAGIC = (0x0A324655, 0x9E5D5157, 0x0AB16F30)
+SECTOR, PAGE = 4096, 256
+EP_OUT, EP_IN = 0x03, 0x84
+CMD_EXCLUSIVE, CMD_REBOOT, CMD_ERASE, CMD_WRITE, CMD_EXIT_XIP, CMD_READ = 0x01, 0x02, 0x03, 0x05, 0x06, 0x84
+
+path = ctypes.util.find_library("usb-1.0") or "/opt/homebrew/lib/libusb-1.0.dylib"
+lib = ctypes.CDLL(path)
+lib.libusb_open_device_with_vid_pid.restype = ctypes.c_void_p
+lib.libusb_open_device_with_vid_pid.argtypes = [ctypes.c_void_p, ctypes.c_uint16, ctypes.c_uint16]
+lib.libusb_claim_interface.argtypes = [ctypes.c_void_p, ctypes.c_int]
+lib.libusb_release_interface.argtypes = [ctypes.c_void_p, ctypes.c_int]
+lib.libusb_bulk_transfer.argtypes = [ctypes.c_void_p, ctypes.c_ubyte, ctypes.c_void_p, ctypes.c_int,
+                                     ctypes.POINTER(ctypes.c_int), ctypes.c_uint]
+lib.libusb_close.argtypes = [ctypes.c_void_p]
+
+
+class Picoboot:
+    def __init__(self):
+        self.ctx = ctypes.c_void_p()
+        if lib.libusb_init(ctypes.byref(self.ctx)) != 0:
+            sys.exit("libusb_init failed")
+        self.h = lib.libusb_open_device_with_vid_pid(self.ctx, 0x2E8A, 0x0003)
+        if not self.h:
+            sys.exit("no RP2040 bootloader (2e8a:0003): run tools/reboot2boot.py first")
+        if lib.libusb_claim_interface(self.h, 1) != 0:
+            sys.exit("cannot claim the PICOBOOT interface")
+        self.token = 1
+
+    def bulk(self, ep, data=b"", size=0, timeout=10000):
+        n = ctypes.c_int()
+        if ep & 0x80:
+            buf = ctypes.create_string_buffer(max(size, 1))
+            r = lib.libusb_bulk_transfer(self.h, ep, buf, size, ctypes.byref(n), timeout)
+            if r != 0:
+                raise IOError(f"bulk in {r}")
+            return buf.raw[:n.value]
+        buf = ctypes.create_string_buffer(data, len(data))
+        r = lib.libusb_bulk_transfer(self.h, ep, buf, len(data), ctypes.byref(n), timeout)
+        if r != 0 or n.value != len(data):
+            raise IOError(f"bulk out {r} ({n.value}/{len(data)})")
+
+    def cmd(self, cid, args=b"", data=b"", read=0):
+        length = read if cid & 0x80 else len(data)
+        hdr = struct.pack("<IIBBHI", 0x431FD10B, self.token, cid, len(args), 0, length) + args.ljust(16, b"\0")
+        self.token += 1
+        self.bulk(EP_OUT, hdr)
+        out = b""
+        if cid & 0x80:  # data in, then a zero-length status out
+            while len(out) < read:
+                out += self.bulk(EP_IN, size=min(read - len(out), 4096))
+            self.bulk(EP_OUT, b"")
+        else:  # data out, then a zero-length status in
+            if data:
+                self.bulk(EP_OUT, data)
+            self.bulk(EP_IN, size=0)
+        return out
+
+    def close(self):
+        lib.libusb_release_interface(self.h, 1)
+        lib.libusb_close(self.h)
+
+
+def reboot(pb):
+    try:
+        pb.cmd(CMD_REBOOT, struct.pack("<III", 0, 0, 500))
+    except IOError:
+        pass  # the device may reset before acknowledging
+
+
+def load_uf2(name):
+    blob = open(name, "rb").read()
+    mem = {}
+    for off in range(0, len(blob), 512):
+        b = blob[off:off + 512]
+        m0, m1, flags, addr, size = struct.unpack_from("<IIIII", b, 0)
+        if (m0, m1) != UF2_MAGIC[:2] or struct.unpack_from("<I", b, 508)[0] != UF2_MAGIC[2]:
+            sys.exit(f"{name}: not a UF2 block at {off}")
+        if flags & 1:  # not for flash
+            continue
+        mem[addr] = b[32:32 + size]
+    sectors = {}
+    for addr, data in mem.items():
+        base = addr & ~(SECTOR - 1)
+        s = sectors.setdefault(base, bytearray(b"\xff" * SECTOR))
+        s[addr - base:addr - base + len(data)] = data
+    return sectors
+
+
+def main():
+    if len(sys.argv) != 2:
+        sys.exit(__doc__)
+    pb = Picoboot()
+    if sys.argv[1] == "--reboot":
+        reboot(pb)
+        print("rebooted")
+        return
+    sectors = load_uf2(sys.argv[1])
+    pb.cmd(CMD_EXCLUSIVE, bytes([1]))
+    pb.cmd(CMD_EXIT_XIP)
+    t0 = time.time()
+    for base in sorted(sectors):
+        data = bytes(sectors[base])
+        pb.cmd(CMD_ERASE, struct.pack("<II", base, SECTOR))
+        pb.cmd(CMD_WRITE, struct.pack("<II", base, SECTOR), data=data)
+    for base in sorted(sectors):  # read back
+        got = pb.cmd(CMD_READ, struct.pack("<II", base, SECTOR), read=SECTOR)
+        if got != bytes(sectors[base]):
+            sys.exit(f"verify failed at {base:#x}")
+    print(f"wrote and verified {len(sectors)} sectors ({len(sectors) * 4} KB) in {time.time() - t0:.1f} s")
+    reboot(pb)
+    print("rebooted")
+
+
+main()
