@@ -42,6 +42,7 @@ Same meaning on every page (owner 2026-11-12: "up and down … A, B, and C … s
 | `help` | list the commands | — | |
 | `madctl <n>` | write the panel's MADCTL register (orientation probe; default 176 = `0xB0`) | — | firmware only (`main_tufty2040.go`) |
 | `pins` | print raw button levels and VBUS | — | firmware only |
+| `imu` | probe Qw/ST for a known motion sensor (WHO_AM_I) and print what answers; also done at boot | — | firmware only |
 | `reboot` | restart the firmware (`arm.SystemReset`); scripted tours start from it | — | firmware only; the badge re-enumerates with the same serial number |
 
 Every press also counts in the Dash page's bar chart, so serial and physical presses are both visible on screen.

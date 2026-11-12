@@ -58,6 +58,7 @@ func main() {
 		Log:         func(s string) { println(s) },
 	}, time.Now())
 	boot("app")
+	reportIMU()
 
 	// USB serial console: line commands, see app.Handlers ("help").
 	handlers := a.Handlers()
@@ -74,6 +75,7 @@ func main() {
 			"UP", machine.BUTTON_UP.Get(), "DOWN", machine.BUTTON_DOWN.Get(), "USER", machine.BUTTON_USER.Get(),
 			"VBUS", machine.VBUS_DETECT.Get())
 	}
+	handlers["imu"] = func([]byte) { reportIMU() } // probe again after plugging a sensor in
 	mux := ui.NewCommandStreamMux(idleReader{ui.NewSerialReader(machine.Serial)}, handlers)
 	go mux.Run()
 
@@ -171,4 +173,15 @@ func boot(stage string) {
 	var m runtime.MemStats
 	runtime.ReadMemStats(&m)
 	println("boot:", stage, "heap_alloc", m.HeapAlloc, "heap_sys", m.HeapSys)
+}
+
+// reportIMU logs the motion sensor on Qw/ST, if any. Until EasyRobot's driver
+// for the part is in, gravity follows the buttons either way.
+func reportIMU() {
+	imu, ok := board.ProbeIMU()
+	if !ok {
+		println("imu: none on Qw/ST: gravity from the buttons")
+		return
+	}
+	println("imu:", imu.Name, "at", imu.Addr, "WHO_AM_I", imu.ID, "(no driver yet: gravity from the buttons)")
 }
