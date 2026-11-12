@@ -1,0 +1,277 @@
+#!/usr/bin/env python3
+"""badgectl — drive the Tufty 2040 TinyGUI showcase over USB serial.
+
+The badge is found by its USB serial number (default df6750955f2a3536, the
+flash unique ID the firmware reports), never by port name.
+
+  badgectl [--grab] CMD [CMD ...]     send console commands, print the replies;
+                                      --grab: photo after every command
+  badgectl --tour [--sim DIR] --out DIR
+                                      replay the simulator tour; at each shot:
+                                      framebuffer dump (PNG) + badge-cam photo
+                                      + simulator PNG side by side
+  badgectl --monitor [SECONDS]        print console output (button test)
+
+CMD is a console command ('up', 'a long', 'page 3', 'stats', …; 'help' lists
+them) or a tour step: up|down|a|b|c[+] (+ = long), user:<ms>, wait:<frames>,
+shot:<name>, sleep:<seconds>.
+"""
+import argparse, os, subprocess, sys, time
+import serial
+from serial.tools import list_ports
+
+# The badge-cam tool (esp32cam's); override with BADGECAM_GRAB.
+GRAB = os.environ.get("BADGECAM_GRAB", os.path.expanduser("~/src/_scratch/badgecam/grab"))
+FRAME = 1 / 30  # the badge's frame period (33 ms)
+CAM_BOX = (485, 327, 1520, 1153)  # badge screen in the 2048×1536 cam frame (--cam-box)
+CAM_FLIP = False  # the cam firmware un-mirrors since 16:29 (hm=1); --cam-flip for older frames
+
+# The tour is the simulator's (examples/tufty2040/sim/main.go, const tour),
+# read from the source so the two never drift apart.
+SIM_MAIN = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "sim", "main.go")
+
+
+def load_tour():
+    import re
+    src = open(SIM_MAIN).read()
+    start = src.index("const tour =")
+    end = src.index("\n\n", start)
+    return "".join(re.findall(r'"([^"]*)"', src[start:end]))
+
+
+def find_port(serial_number):
+    for p in list_ports.comports():
+        if p.serial_number == serial_number:
+            return p.device
+    sys.exit(f"badgectl: no USB device with serial {serial_number} "
+             "(badge off? press its power button once)")
+
+
+class Badge:
+    def __init__(self, serial_number, console_log=None):
+        self.port = serial.Serial(find_port(serial_number), 115200, timeout=0.05)
+        self.log = open(console_log, "ab") if console_log else None
+        self.read(0.3)
+
+    def _rx(self, n):
+        b = self.port.read(n)
+        if b and self.log:
+            self.log.write(b)
+            self.log.flush()
+        return b
+
+    def read(self, secs):
+        end, out = time.time() + secs, b""
+        while time.time() < end:
+            out += self._rx(4096)
+        return out
+
+    def send(self, line, wait=0.25):
+        self.port.write(line.encode() + b"\n")
+        return self.read(wait).decode(errors="replace")
+
+    def dump(self, path):
+        from PIL import Image
+        self.port.write(b"dump\n")
+        buf, end = b"", time.time() + 15
+        while time.time() < end and b"\nEND" not in buf:
+            buf += self.port.read(65536)  # pixels are not copied to the console log
+        i = buf.find(b"FB 320 240")
+        if i < 0:
+            raise RuntimeError("no framebuffer header in the reply")
+        start = buf.index(b"\n", i) + 1
+        raw = buf[start:start + 320 * 240 * 2]
+        if len(raw) != 320 * 240 * 2:
+            raise RuntimeError(f"short dump: {len(raw)} bytes")
+        img = Image.new("RGB", (320, 240))
+        px = img.load()
+        for k in range(320 * 240):
+            v = raw[2 * k] << 8 | raw[2 * k + 1]
+            r, g, b = (v >> 11) & 31, (v >> 5) & 63, v & 31
+            px[k % 320, k // 320] = (r << 3 | r >> 2, g << 2 | g >> 4, b << 3 | b >> 2)
+        img.save(path)
+        return path
+
+
+PACE = 0.0  # --pace: extra seconds after every tour step (for a human watching)
+NO_CAM = False  # --no-cam: never touch the camera (someone else is using it)
+
+
+RELAY = "http://127.0.0.1:8765/snapshot"  # the owner's camera page relays frames while connected
+
+
+def relay_snapshot(out_dir):
+    """Latest frame through the owner's connected camera page; None if absent."""
+    import json, shutil, urllib.request
+    try:
+        req = urllib.request.Request(RELAY, method="POST")
+        with urllib.request.urlopen(req, timeout=10) as r:
+            path = json.load(r).get("path")
+    except Exception:
+        return None
+    if not path or not os.path.exists(path):
+        return None
+    dst = os.path.join(out_dir, os.path.basename(path))
+    shutil.copy(path, dst)
+    return dst
+
+
+def grab(out_dir, tries=3):
+    """Badge-cam photo: esp32cam's grab tool (applies the owner's
+    _scratch/badgecam/settings.json); when his camera page holds the port
+    ('port busy'), the frame his page relays. Returns the JPEG path or None."""
+    if NO_CAM:
+        return None
+    for _ in range(tries):
+        r = subprocess.run([GRAB, "--out", out_dir], capture_output=True, text=True)
+        out = (r.stdout + r.stderr).strip().splitlines()
+        if r.returncode == 0 and out and out[-1].endswith(".jpg") and os.path.exists(out[-1]):
+            return out[-1]
+        if any("busy" in line for line in out):
+            time.sleep(1.0)  # let the page's stream catch up with the last input
+            return relay_snapshot(out_dir)
+        print(f"grab: {out[-1] if out else 'no output'}", file=sys.stderr)
+    return None
+
+
+def step_to_command(step):
+    """Tour step -> (console command or None, seconds to wait afterwards)."""
+    name, _, arg = step.partition(":")
+    if name == "wait":
+        return None, int(arg) * FRAME
+    if name == "sleep":
+        return None, float(arg)
+    if name == "user":
+        return f"user {arg}", 3 * FRAME
+    long = name.endswith("+")
+    return name.rstrip("+") + (" long" if long else ""), 3 * FRAME
+
+
+def side_by_side(sim, dev, cam, out, title):
+    from PIL import Image, ImageDraw
+    tiles = []
+    for path, label in ((sim, "simulator"), (dev, "badge framebuffer"), (cam, "badge cam")):
+        if path and os.path.exists(path):
+            im = Image.open(path).convert("RGB")
+            if label == "badge cam":
+                im = im.crop(CAM_BOX)  # the badge screen in the camera frame
+                if CAM_FLIP:
+                    im = im.transpose(Image.FLIP_LEFT_RIGHT)
+                im.thumbnail((400, 340))
+        else:
+            im = Image.new("RGB", (320, 240), (60, 0, 0))
+        tiles.append((im, label))
+    w = sum(t.width for t, _ in tiles) + 10 * (len(tiles) - 1)
+    h = max(t.height for t, _ in tiles) + 18
+    sheet = Image.new("RGB", (w, h), (30, 30, 30))
+    d = ImageDraw.Draw(sheet)
+    x = 0
+    for im, label in tiles:
+        sheet.paste(im, (x, 18))
+        d.text((x + 2, 2), label, fill=(255, 255, 0))
+        x += im.width + 10
+    d.text((w - 160, 2), title, fill=(255, 255, 255))
+    sheet.save(out)
+    return out
+
+
+def reboot(b, serial_number, console_log):
+    """Restart the firmware so a tour starts from the same state as the simulator."""
+    try:
+        b.port.write(b"reboot\n")
+        b.port.flush()
+    except serial.SerialException:
+        pass
+    b.port.close()
+    time.sleep(1.0)
+    for _ in range(100):  # wait for the badge to enumerate again
+        if any(p.serial_number == serial_number for p in list_ports.comports()):
+            break
+        time.sleep(0.1)
+    time.sleep(0.5)
+    nb = Badge(serial_number, console_log)
+    nb.read(4.0)  # boot log (the firmware waits up to 3 s for the console)
+    return nb
+
+
+def tour(b, out_dir, sim_dir):
+    os.makedirs(out_dir, exist_ok=True)
+    cam_dir = os.path.join(out_dir, "cam")
+    os.makedirs(cam_dir, exist_ok=True)
+    log = []
+    for step in load_tour().split(","):
+        if step.startswith("shot:"):
+            name = step[5:]
+            dev = b.dump(os.path.join(out_dir, f"{name}-badge.png"))
+            cam = grab(cam_dir)
+            sim = os.path.join(sim_dir, f"{name}.png") if sim_dir else None
+            sheet = side_by_side(sim, dev, cam, os.path.join(out_dir, f"{name}-compare.png"), name)
+            stats = b.send("stats", 0.6).strip().replace("\r", "")
+            log.append((name, dev, cam, sheet, stats))
+            print(f"shot {name}: {sheet}\n  {stats}")
+            continue
+        cmd, wait = step_to_command(step)
+        if cmd:
+            reply = b.send(cmd, 0.05)
+            print(f"> {cmd}  {reply.strip()}" if reply.strip() else f"> {cmd}")
+        time.sleep(wait + (PACE if cmd else 0))
+    return log
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--serial", default="df6750955f2a3536")
+    ap.add_argument("--grab", action="store_true", help="badge-cam photo after every command")
+    ap.add_argument("--tour", action="store_true")
+    ap.add_argument("--sim", help="simulator PNG directory for --tour")
+    ap.add_argument("--out", default="badgectl-out")
+    ap.add_argument("--monitor", type=float, nargs="?", const=60.0)
+    ap.add_argument("--cam-box", help="x0,y0,x1,y1 of the badge screen in the cam photo")
+    ap.add_argument("--cam-flip", action="store_true", help="mirror the cam image (frames before 16:29)")
+    ap.add_argument("--no-cam", action="store_true", help="skip badge-cam photos")
+    ap.add_argument("--pace", type=float, default=0.0, help="extra seconds after each tour step")
+    ap.add_argument("commands", nargs="*")
+    a = ap.parse_args()
+
+    global PACE
+    PACE = a.pace
+    if a.no_cam:
+        global NO_CAM
+        NO_CAM = True
+    if a.cam_flip:
+        global CAM_FLIP
+        CAM_FLIP = True
+    if a.cam_box:
+        global CAM_BOX
+        CAM_BOX = tuple(int(v) for v in a.cam_box.split(","))
+    os.makedirs(a.out, exist_ok=True)
+    b = Badge(a.serial, os.path.join(a.out, "console.log"))
+    if a.monitor:
+        end = time.time() + a.monitor
+        while time.time() < end:
+            out = b.read(0.2).decode(errors="replace")
+            if out:
+                sys.stdout.write(out)
+                sys.stdout.flush()
+        return
+    if a.tour:
+        b = reboot(b, a.serial, os.path.join(a.out, "console.log"))
+        tour(b, a.out, a.sim)
+        return
+    os.makedirs(a.out, exist_ok=True)
+    for c in a.commands:
+        cmd, wait = step_to_command(c) if (":" in c or c.rstrip("+") in ("up", "down", "a", "b", "c")) and " " not in c else (c, 0.3)
+        if cmd is None:
+            time.sleep(wait)
+            continue
+        if cmd == "dump":
+            print(b.dump(os.path.join(a.out, time.strftime("%Y%m%d-%H%M%S") + "-badge.png")))
+            continue
+        print(f"> {cmd}\n{b.send(cmd, max(wait, 0.3)).strip()}")
+        if a.grab:
+            time.sleep(0.15)
+            print(f"  photo: {grab(a.out)}")
+
+
+if __name__ == "__main__":
+    main()
