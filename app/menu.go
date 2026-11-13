@@ -98,8 +98,8 @@ func (t *tile) Draw(ctx ui.Context) {
 type menu struct {
 	tiles  []*tile
 	full   *tile
-	log    func(string)
-	speed  int // index into menuSpeeds
+	log3   func(p1, p2, p3 string) // App.log3: parts copied into the log, no string built
+	speed  int                     // index into menuSpeeds
 	paused bool
 	frame  int
 }
@@ -147,28 +147,35 @@ func (m *menu) fullPress(b Button) bool { return m.full.d.fullPress(b) }
 func (m *menu) open(t *tile) {
 	t.d.showFull()
 	m.full = t
-	m.log("demo " + t.name + " full screen")
+	m.log3("demo ", t.name, " full screen")
 }
 
 // report prints each tile's frame budget on the console (`tiles`).
-func (m *menu) report(log func(string)) {
+func (m *menu) report(log func(string), b *textBuf) {
 	for _, t := range m.tiles {
-		log("tile " + t.name + " tick_us " + itoa(int(t.tickUS)) + " draw_us " + itoa(int(t.drawUS)))
+		log(b.reset().str("tile ").str(t.name).str(" tick_us ").int(int(t.tickUS)).str(" draw_us ").int(int(t.drawUS)).String())
 	}
 }
 
-func (a *App) pageDemos(demos ...*page) *page {
-	m := &menu{log: a.log, speed: 1}
-	children := make([]ui.Widget, len(demos))
-	for i, p := range demos {
-		t := newTile(p.name, p.demo.(previewer), m.open)
-		m.tiles = append(m.tiles, t)
-		children[i] = t
+// newMenu makes the Demos page's model: a tile per demo, running it live.
+func (a *App) newMenu(names []string, demos []previewer) *menu {
+	m := &menu{log3: a.log3, speed: 1}
+	for i, d := range demos {
+		m.tiles = append(m.tiles, newTile(names[i], d, m.open))
 	}
-	a.menu = m
+	return m
+}
+
+// pageDemos builds the Demos page around the menu's tiles.
+func (a *App) pageDemos() *page {
+	m := a.menu
+	children := make([]ui.Widget, 0, len(m.tiles)+1)
+	for _, t := range m.tiles {
+		children = append(children, t)
+	}
 	// a combo box among the tiles: its list opens over the live previews
 	children = append(children, widget.NewDropdown(76, a.overlayStyle(), menuSpeeds, &m.speed,
-		func(_ int, s string) { a.log("demos " + s) }))
+		func(_ int, s string) { a.log2("demos ", s) }))
 	p := a.newPageOpt("Demos", container.WithArranger[ui.Widget](&layout.Wrap{
 		Gap: 4, Main: layout.Center, Cross: layout.Center, Block: layout.Center}), children...)
 	p.demo = m
@@ -185,32 +192,42 @@ func (a *App) overlayStyle() widget.OverlayStyle {
 }
 
 // menuOptions is the Demos page's B: a choice question over the live tiles.
-func (a *App) menuOptions() {
+// initMenuDialogs builds the Demos options dialogs once, in setup: opening
+// them later allocates nothing (owner: no allocations after setup).
+func (a *App) initMenuDialogs() {
 	m := a.menu
-	pause := "Pause all"
-	if m.paused {
-		pause = "Resume all"
-	}
-	opts := []string{pause, "Reset all...", "About", "Close"}
-	a.overlay.OpenCentered(widget.NewDialog(a.overlayStyle(), "Demos", nil, opts, func(i int) {
+	// sized for the longer label; the first option reads Pause or Resume
+	a.optLabels = []string{"Resume all", "Reset all...", "About", "Close"}
+	a.optDialog = widget.NewDialog(a.overlayStyle(), "Demos", nil, a.optLabels, func(i int) {
 		switch i {
 		case 0:
 			m.paused = !m.paused
-			a.log("demos " + pause)
+			a.log2("demos ", a.optLabels[0])
 		case 1:
-			a.overlay.OpenCentered(widget.NewDialog(a.overlayStyle(), "Reset all demos?",
-				[]string{"Life, water, fire, pong and", "boids start over."}, []string{"Reset", "Cancel"},
-				func(i int) {
-					if i == 0 {
-						for _, t := range m.tiles {
-							t.d.reset()
-						}
-						a.log("demos reset")
-					}
-				}, nil))
+			a.overlay.OpenCentered(a.resetDialog)
 		case 2:
-			a.overlay.OpenCentered(widget.NewDialog(a.overlayStyle(), "About",
-				[]string{"tinygui on a Tufty 2040:", "five live demos in tiles,", "laid out by layout.Wrap.", "A or B closes this."}, nil, nil, nil))
+			a.overlay.OpenCentered(a.aboutDialog)
 		}
-	}, nil))
+	}, nil)
+	a.resetDialog = widget.NewDialog(a.overlayStyle(), "Reset all demos?",
+		[]string{"Life, water, fire, pong and", "boids start over."}, []string{"Reset", "Cancel"},
+		func(i int) {
+			if i == 0 {
+				for _, t := range m.tiles {
+					t.d.reset()
+				}
+				a.log("demos reset")
+			}
+		}, nil)
+	a.aboutDialog = widget.NewDialog(a.overlayStyle(), "About",
+		[]string{"tinygui on a Tufty 2040:", "five live demos in tiles,", "laid out by layout.Wrap.", "A or B closes this."}, nil, nil, nil)
+}
+
+// menuOptions opens the Demos options (built in initMenuDialogs).
+func (a *App) menuOptions() {
+	a.optLabels[0] = "Pause all"
+	if a.menu.paused {
+		a.optLabels[0] = "Resume all"
+	}
+	a.overlay.OpenCentered(a.optDialog)
 }

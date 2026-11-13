@@ -39,7 +39,7 @@ type life struct {
 	full        *widget.CellGrid // 5 px LEDs on the whole screen
 	fullOn      bool
 	txt         textBuf
-	log         func(string)
+	log2        func(p1, p2 string) // App.log2: two parts, no string built
 }
 
 func newLife() *life {
@@ -66,22 +66,30 @@ func (l *life) seed() {
 			}
 		}
 	case "Glider gun": // Gosper glider gun, 36×9
-		for _, p := range [][2]int{{24, 0}, {22, 1}, {24, 1}, {12, 2}, {13, 2}, {20, 2}, {21, 2}, {34, 2}, {35, 2},
-			{11, 3}, {15, 3}, {20, 3}, {21, 3}, {34, 3}, {35, 3}, {0, 4}, {1, 4}, {10, 4}, {16, 4}, {20, 4}, {21, 4},
-			{0, 5}, {1, 5}, {10, 5}, {14, 5}, {16, 5}, {17, 5}, {22, 5}, {24, 5}, {10, 6}, {16, 6}, {24, 6},
-			{11, 7}, {15, 7}, {12, 8}, {13, 8}} {
-			set(p[0]+2, p[1]+2)
+		for _, p := range lifeGun {
+			set(int(p[0])+2, int(p[1])+2)
 		}
 	case "Acorn":
-		for _, p := range [][2]int{{1, 0}, {3, 1}, {0, 2}, {1, 2}, {4, 2}, {5, 2}, {6, 2}} {
-			set(p[0]+lifeCols/2-3, p[1]+lifeRows/2-1)
+		for _, p := range lifeAcorn {
+			set(int(p[0])+lifeCols/2-3, int(p[1])+lifeRows/2-1)
 		}
 	case "R-pentomino":
-		for _, p := range [][2]int{{1, 0}, {2, 0}, {0, 1}, {1, 1}, {1, 2}} {
-			set(p[0]+lifeCols/2-1, p[1]+lifeRows/2-1)
+		for _, p := range lifeRPentomino {
+			set(int(p[0])+lifeCols/2-1, int(p[1])+lifeRows/2-1)
 		}
 	}
 }
+
+// the patterns' cells, package-level so seeding allocates nothing (a slice
+// literal in seed was a heap allocation per pattern change)
+var (
+	lifeGun = [...][2]int8{{24, 0}, {22, 1}, {24, 1}, {12, 2}, {13, 2}, {20, 2}, {21, 2}, {34, 2}, {35, 2},
+		{11, 3}, {15, 3}, {20, 3}, {21, 3}, {34, 3}, {35, 3}, {0, 4}, {1, 4}, {10, 4}, {16, 4}, {20, 4}, {21, 4},
+		{0, 5}, {1, 5}, {10, 5}, {14, 5}, {16, 5}, {17, 5}, {22, 5}, {24, 5}, {10, 6}, {16, 6}, {24, 6},
+		{11, 7}, {15, 7}, {12, 8}, {13, 8}}
+	lifeAcorn      = [...][2]int8{{1, 0}, {3, 1}, {0, 2}, {1, 2}, {4, 2}, {5, 2}, {6, 2}}
+	lifeRPentomino = [...][2]int8{{1, 0}, {2, 0}, {0, 1}, {1, 1}, {1, 2}}
+)
 
 // step advances one generation on a torus.
 func (l *life) step() {
@@ -127,13 +135,12 @@ func rand32() uint32 {
 }
 
 func (a *App) pageLife() *page {
-	l := newLife()
-	l.log = a.log
+	l := a.life
 	run := widget.NewToggle(44, 12, fontBody, colFG, "RUN", "PAUSE", colGood, colTrack,
 		func() bool { return l.running }, func(v bool) { l.running = v })
 	pat := widget.NewInteractiveLabelChoice(70, 11, lifePatterns,
 		widget.WithLabelChoiceIndex(&l.pattern), widget.WithLabelChoiceFont(fontBody), widget.WithLabelChoiceColor(colFG),
-		widget.WithLabelChoiceChange(func(int, string) { l.seed(); a.log("life " + lifePatterns[l.pattern]) }))
+		widget.WithLabelChoiceChange(func(int, string) { l.seed(); a.log2("life ", lifePatterns[l.pattern]) }))
 	full := widget.NewToggle(44, 12, fontBody, colFG, "SHOW", "SHOW", colTrack, colTrack,
 		func() bool { return false }, func(bool) { l.fullOn = true; a.log("life full screen") })
 	gen := a.text(104, func() string { return l.txt.reset().str("gen ").int(l.gen).String() }, colMuted)
@@ -173,7 +180,7 @@ func (l *life) fullPress(b Button) bool {
 		}
 		l.pattern = (l.pattern + d) % len(lifePatterns)
 		l.seed()
-		l.log("life " + lifePatterns[l.pattern])
+		l.log2("life ", lifePatterns[l.pattern])
 	case BtnA:
 		l.running = !l.running
 	case BtnB:

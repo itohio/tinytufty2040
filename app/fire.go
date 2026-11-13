@@ -63,7 +63,7 @@ type fire struct {
 	grid, full *widget.CellGrid
 	fullOn     bool
 	txt, txt2  textBuf
-	log        func(string)
+	log2       func(p1, p2 string) // App.log2: two parts, no string built
 }
 
 func newFire() *fire {
@@ -195,10 +195,10 @@ func (f *fire) fullPress(b Button) bool {
 	switch b {
 	case BtnUp:
 		f.turn(1)
-		f.log("gravity " + gravityNames[f.dir])
+		f.log2("gravity ", gravityNames[f.dir])
 	case BtnDown:
 		f.turn(-1)
-		f.log("gravity " + gravityNames[f.dir])
+		f.log2("gravity ", gravityNames[f.dir])
 	case BtnA:
 		f.splash()
 	case BtnB:
@@ -215,11 +215,10 @@ func (f *fire) palette() []color.RGBA { return firePalette }
 func (f *fire) showFull()             { f.fullOn = true }
 
 func (a *App) pageFire() *page {
-	f := newFire()
-	f.log = a.log
+	f := a.fire
 	grav := widget.NewInteractiveLabelChoice(52, 11, gravityNames,
 		widget.WithLabelChoiceIndex(&f.dir), widget.WithLabelChoiceFont(fontBody), widget.WithLabelChoiceColor(colFG),
-		widget.WithLabelChoiceChange(func(_ int, s string) { a.log("gravity " + s) }))
+		widget.WithLabelChoiceChange(func(_ int, s string) { a.log2("gravity ", s) }))
 	pour := widget.NewToggle(44, 12, fontBody, colFG, "ON", "OFF", colGood, colTrack,
 		func() bool { return f.pour }, func(v bool) { f.pour = v })
 	splash := widget.NewToggle(44, 12, fontBody, colFG, "DROP", "DROP", colTrack, colTrack,

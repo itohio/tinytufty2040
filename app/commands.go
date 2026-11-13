@@ -56,7 +56,7 @@ func (a *App) exec(c command) {
 	case "user":
 		a.UserHold(time.Duration(c.arg) * time.Millisecond)
 	case "page":
-		if c.arg >= 0 && c.arg < len(a.pages) {
+		if c.arg >= 0 && c.arg < a.pages.Count() {
 			a.showPage(c.arg)
 		}
 	case "led":
@@ -79,13 +79,13 @@ func (a *App) exec(c command) {
 	case "dump":
 		a.dumpReq = true
 	case "stats":
-		a.log("build " + a.cfg.BuildID)
+		a.log2("build ", a.cfg.BuildID)
 		a.log(a.txtStat.reset().str("fps ").int(a.fps).str(" draw_us ").int(int(a.drawUS)).str(" push_us ").int(int(a.pushUS)).
 			str(" page ").int(a.cur).str(" edit ").int(btoi(a.editing)).String())
 		a.memReport() // live and free after a collection: heap_alloc counts uncollected garbage
 		a.log(a.txtStat.reset().str("frame allocs update ").int(a.allocU).str(" draw ").int(a.allocD).str(" push ").int(a.allocP).String())
 	case "tiles": // frame budget of each demo tile on the Demos page
-		a.menu.report(a.log)
+		a.menu.report(a.log, &a.txtStat)
 	case "light": // the phototransistor's last reading; light <raw> forces a reading (0: darkest), light -1 the real sensor again
 		if c.hasArg {
 			a.lightForce = clampi(c.arg, -1, 65535)
@@ -103,7 +103,7 @@ func (a *App) exec(c command) {
 			a.health.memShow = c.arg != 0
 		}
 	case "version": // the firmware's build ID (tools/build)
-		a.log("build " + a.cfg.BuildID)
+		a.log2("build ", a.cfg.BuildID)
 	case "help":
 		for _, l := range helpLines {
 			a.log(l)

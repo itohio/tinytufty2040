@@ -273,8 +273,7 @@ func (b *boids) scatter() {
 }
 
 func (a *App) pageBoids() *page {
-	b := newBoids()
-	b.log = a.log
+	b := a.boids
 	count := widget.NewInteractiveLabelChoice(52, 11, boidsCounts,
 		widget.WithLabelChoiceIndex(&b.count), widget.WithLabelChoiceFont(fontBody), widget.WithLabelChoiceColor(colFG))
 	scatter := widget.NewToggle(44, 12, fontBody, colFG, "GO", "GO", colTrack, colTrack,

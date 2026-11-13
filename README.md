@@ -35,4 +35,4 @@ python3 tools/reboot2boot.py && cp tufty.uf2 /Volumes/RPI-RP2/
 tools/badgectl stats
 ```
 
-Buttons: UP/DOWN focus (or change a value while editing), A select, B back, C next page (hold: previous), USER held > 1 s screensaver.
+Buttons: UP/DOWN focus (or change a value while editing), A select, B back (on a page's top level: the page shown before), C next page (hold: previous), USER held > 1 s screensaver.

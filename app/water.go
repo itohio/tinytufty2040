@@ -42,7 +42,7 @@ type water struct {
 	fullIdx int
 	txt     textBuf
 	txt2    textBuf
-	log     func(string)
+	log2    func(p1, p2 string) // App.log2: two parts, no string built
 }
 
 func newWater() *water {
@@ -149,11 +149,10 @@ func (w *water) shadeCells() {
 }
 
 func (a *App) pageWater() *page {
-	w := newWater()
-	w.log = a.log
+	w := a.water
 	grav := widget.NewInteractiveLabelChoice(52, 11, gravityNames,
 		widget.WithLabelChoiceIndex(&w.dir), widget.WithLabelChoiceFont(fontBody), widget.WithLabelChoiceColor(colFG),
-		widget.WithLabelChoiceChange(func(i int, s string) { a.log("gravity " + s) }))
+		widget.WithLabelChoiceChange(func(i int, s string) { a.log2("gravity ", s) }))
 	pour := widget.NewToggle(44, 12, fontBody, colFG, "ON", "OFF", colGood, colTrack,
 		func() bool { return w.pour }, func(v bool) { w.pour = v })
 	reset := widget.NewToggle(44, 12, fontBody, colFG, "FILL", "FILL", colTrack, colTrack,
@@ -194,7 +193,7 @@ func (w *water) fullPress(b Button) bool {
 		} else {
 			w.turn(-1)
 		}
-		w.log("gravity " + gravityNames[w.dir])
+		w.log2("gravity ", gravityNames[w.dir])
 	case BtnA:
 		w.pour = !w.pour
 	case BtnB:

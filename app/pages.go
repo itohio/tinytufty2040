@@ -57,6 +57,24 @@ func box(w, h uint16, l layout.Strategy, children ...ui.Widget) *container.Base[
 	)
 }
 
+// initLive makes the widgets the App feeds every frame whether or not their
+// page is built (sensor history, gauges, the plasma, the log): they hold
+// state, so they live as long as the App and the pages built around them
+// come and go (container.Pages releases pages).
+func (a *App) initLive() {
+	a.spark = newSparkline(innerW, 52, 0, 100)
+	a.battGauge = widget.NewVolumeGauge[float32](innerW/2-6, 12, &a.battPct, 0, 100, 10, colGood, colTrack)
+	a.lightGauge = widget.NewSolidGauge[float32](innerW/2-6, 12, &a.light, 0, 100, colAccent, colTrack)
+	a.hGauge = widget.NewGauge[float32](150, 10, &a.curves[3], 0, 100, colAccent, colTrack)
+	a.multi = widget.NewMultiGauge[float32](150, 10, 0, 100, &a.mix, []color.RGBA{colBad, colGood, accents[0]}, colTrack, colFG)
+	a.multi.Shares = true // the mix as percentages of its total: always inside the bar (owner 2026-11-13)
+	renderGradient(a.gradient[:], plasmaW, plasmaH)
+	a.plasmaBmp = widget.NewBitmap16(plasmaW, plasmaH, a.plasma[:])
+	a.logView = widget.NewInteractiveLog(innerW-8, 11, 13, widget.WithMultilineFont(fontBody), widget.WithMultilineColor(colFG))
+	a.logView.SetCapacity(logCapacity)
+	a.info = widget.NewMultilineLabel(innerW, 11, 2, widget.WithMultilineFont(fontBody), widget.WithMultilineColor(colMuted))
+}
+
 // Dashboard: live sensors, graphs, frame statistics. Nothing is focusable.
 func (a *App) pageDashboard() *page {
 	uptime := newHeading(120, 22, func() string {
@@ -79,9 +97,6 @@ func (a *App) pageDashboard() *page {
 				str(" push ").fixed(float32(a.pushUS)/1000, 1).str(" ms").String()
 		}, colMuted),
 	)
-	a.spark = newSparkline(innerW, 52, 0, 100)
-	a.battGauge = widget.NewVolumeGauge[float32](innerW/2-6, 12, &a.battPct, 0, 100, 10, colGood, colTrack)
-	a.lightGauge = widget.NewSolidGauge[float32](innerW/2-6, 12, &a.light, 0, 100, colAccent, colTrack)
 	return a.newPage("Dash",
 		still(box(innerW, 36, layout.HList(10), uptime, readouts)),
 		a.caption(innerW, "Light sensor history (sparkline)"),
@@ -105,9 +120,6 @@ func (a *App) pageGauges() *page {
 			widget.NewLabel(30, 11, fontBody, func() string { return names[i] }, colMuted),
 		)
 	}
-	a.hGauge = widget.NewGauge[float32](150, 10, &a.curves[3], 0, 100, colAccent, colTrack)
-	a.multi = widget.NewMultiGauge[float32](150, 10, 0, 100, &a.mix, []color.RGBA{colBad, colGood, accents[0]}, colTrack, colFG)
-	a.multi.Shares = true // the mix as percentages of its total: always inside the bar (owner 2026-11-13)
 	right := box(160, 84, layout.VList(3),
 		a.caption(160, "Gauge (ease i/o)"), a.hGauge,
 		a.caption(160, "MultiGauge (mix)"), a.multi,
@@ -195,8 +207,6 @@ func (a *App) pagePictures() *page {
 		widget.NewBitmap16(icons.ThermometerWidth, icons.ThermometerHeight, icons.ThermometerPng),
 	}
 	pick := widget.NewInteractiveWidgetChoice[ui.Widget](40, 40, bitmaps, widget.WithWidgetChoiceIndex[ui.Widget](&a.bitmapIdx))
-	renderGradient(a.gradient[:], plasmaW, plasmaH)
-	a.plasmaBmp = widget.NewBitmap16(plasmaW, plasmaH, a.plasma[:])
 	strip := box(innerW, plasmaH+12, layout.HList(8),
 		box(plasmaW, plasmaH+12, layout.VList(1), a.caption(plasmaW, "Bitmap16"), a.plasmaBmp),
 		widget.NewSeparator(3, plasmaH+12, colTrack),
@@ -228,10 +238,6 @@ func (a *App) pageLayouts() *page {
 	for _, s := range []string{"v", "flow", "fills", "column", "first", "then", "next"} {
 		vf = append(vf, newChip(s))
 	}
-	var hl []ui.Widget
-	for i := range 6 {
-		hl = append(hl, newSwatch(14, 30, accents[i%4]), widget.NewSeparator(2, 30, colMuted))
-	}
 	panel := func(title string, inner ui.Widget) ui.Widget {
 		return box(half, 88, layout.VList(2), a.caption(half, title), inner)
 	}
@@ -240,16 +246,22 @@ func (a *App) pageLayouts() *page {
 			panel("Grid(4,4)", box(half, 70, layout.Grid(4, 4), sw...)),
 			panel("HFlow(4)", box(half, 70, layout.HFlow(4, 0), hf...)),
 		)),
+		// three panels: a fourth (HList + Separator, 12 widgets) cost heap
+		// the badge needs free (Leader 2026-11-13)
 		still(box(innerW, 88, layout.HList(8),
 			panel("VFlow(3)", box(half, 70, layout.VFlow(3, 0), vf...)),
-			panel("HList(2) + Separator", box(half, 70, layout.HList(2), hl...)),
 		)),
 	)
 }
 
+// listRows is the List page's length: 8 (Leader 2026-11-13: the heap needs
+// 30 KB free after setup). 10 rows fit the 186 px view, so the list no
+// longer scrolls; each row's widgets and text cost heap (20 ran out at boot).
+const listRows = 8
+
 // List: a ScrollChoice with a scrollbar observer and a detail panel.
 func (a *App) pageList() *page {
-	const rows, rowH = 20, 16 // field height: 12 px min content + 2×2 frame
+	const rows, rowH = listRows, 16 // field height: 12 px min content + 2×2 frame
 	var items []ui.Widget
 	for i := range rows {
 		name := a.listNames[i].reset().str("Channel ").pad2(i + 1).String()
@@ -280,12 +292,8 @@ func (a *App) pageList() *page {
 
 // Log: scrollable event log fed by buttons, navigator events and serial.
 func (a *App) pageLog() *page {
-	a.logView = widget.NewInteractiveLog(innerW-8, 11, 13, widget.WithMultilineFont(fontBody), widget.WithMultilineColor(colFG))
-	a.logView.SetCapacity(logCapacity)
-	info := widget.NewMultilineLabel(innerW, 11, 2, widget.WithMultilineFont(fontBody), widget.WithMultilineColor(colMuted))
-	a.info = info
 	return a.newPage("Log",
 		newField("", 0, innerW, a.logView),
-		still(info),
+		still(a.info),
 	)
 }

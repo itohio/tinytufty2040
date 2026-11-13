@@ -243,8 +243,7 @@ func (p *pong) leave() {
 }
 
 func (a *App) pagePong() *page {
-	p := newPong()
-	p.log = a.log
+	p := a.pong
 	level := widget.NewInteractiveLabelChoice(52, 11, pongLevels,
 		widget.WithLabelChoiceIndex(&p.level), widget.WithLabelChoiceFont(fontBody), widget.WithLabelChoiceColor(colFG))
 	play := widget.NewToggle(44, 12, fontBody, colFG, "PLAY", "PLAY", colTrack, colTrack,

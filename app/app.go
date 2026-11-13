@@ -69,14 +69,18 @@ type App struct {
 	hw  Hardware
 	cfg Config
 
-	ctx      ui.ContextImpl
-	tabsCtx  ui.ContextImpl
-	footCtx  ui.ContextImpl
-	root     *container.Base[ui.Widget]
-	tabs     *tabBar
-	pager    *widget.InteractiveWidgetChoice[ui.Widget]
+	ctx     ui.ContextImpl
+	tabsCtx ui.ContextImpl
+	footCtx ui.ContextImpl
+	root    *container.Base[ui.Widget]
+	tabs    *tabBar
+	// pages: every page built in setup (container.Pages.BuildAll), so showing
+	// one allocates nothing (owner: no allocations after setup); built[i] is
+	// page i, demoOf[i] its demo
+	pages    *container.Pages
+	built    []*page
+	demoOf   []demo
 	footer   *widget.Label
-	pages    []*page
 	cur      int
 	editing  bool
 	saver    bool
@@ -103,13 +107,22 @@ type App struct {
 	pngIdx                 int
 	bitmapIdx              int
 	menu                   *menu
+	optLabels              []string // the Demos options dialog's labels (first: Pause/Resume all)
+	optDialog, resetDialog *widget.Dialog
+	aboutDialog            *widget.Dialog
+	// demo models: they outlive their pages (the Demos page's tiles run them)
+	life  *life
+	water *water
+	fire  *fire
+	pong  *pong
+	boids *boids
 	lightForce             int // light <raw>: forced sensor reading, -1: the real sensor
 	health                 health
 	txtStat                textBuf
 	allocU, allocD, allocP int // allocations in the last frame (ReportAllocs)
 	solid                  int // grey level of a uniform test screen, -1: off
 	overlay                *container.Overlay
-	picturesPage           *page
+	imagePage              int // index of the Image page (the plasma animates only there)
 	full                   *widget.CellGrid // a demo drawn full screen instead of the UI
 	fullCtx                ui.ContextImpl
 	speedMS                int
@@ -150,14 +163,28 @@ type App struct {
 	// zero-allocation text buffers, one per live label
 	txtUptime, txtLight, txtBatt, txtFrame, txtFoot textBuf
 	txtSpeed, txtLED, txtBL, txtGain, txtSel        textBuf
-	txtSaver                                        textBuf
-	listNames, listVals                             [20]textBuf
+	txtSaver, txtInfo, txtLog                       textBuf
+	listNames, listVals                             [listRows]textBuf
 }
 
 const (
-	plasmaW = 64
-	plasmaH = 40
+	// the Image page's Bitmap16 plasma and Bitmap8 gradient: 48×30 (2.9 KB
+	// and 1.4 KB); 64×40 cost 3.4 KB more of a heap that needs 30 KB free
+	plasmaW = 48
+	plasmaH = 30
+	// how far B can go back through the pages shown before
+	pagesHistory = 8
 )
+
+// initDemos makes the demo models and the Demos page's tiles that run them:
+// they live as long as the App, their pages are built around them on demand.
+func (a *App) initDemos() {
+	a.life, a.water, a.fire, a.pong, a.boids = newLife(), newWater(), newFire(), newPong(), newBoids()
+	a.life.log2, a.water.log2, a.fire.log2 = a.log2, a.log2, a.log2
+	a.pong.log, a.boids.log = a.log, a.log
+	a.menu = a.newMenu([]string{"Life", "Water", "Fire", "Pong", "Boids"},
+		[]previewer{a.life, a.water, a.fire, a.pong, a.boids})
+}
 
 // New builds the whole UI. d must stay valid for the app's lifetime.
 func New(d ui.Displayer, hw Hardware, cfg Config, now time.Time) *App {
@@ -181,25 +208,42 @@ func New(d ui.Displayer, hw Hardware, cfg Config, now time.Time) *App {
 		a.backlight = 100
 	}
 	a.restartCurves()
-	demos := []*page{a.pageLife(), a.pageWater(), a.pageFire(), a.pagePong(), a.pageBoids()}
-	a.picturesPage = a.pagePictures()
-	a.pages = append([]*page{
-		a.pageDemos(demos...),
-		a.pageDashboard(), a.pageGauges(), a.pageControls(), a.picturesPage,
-		a.pageLayouts(), a.pageList(), a.pageLog(),
-	}, demos...)
-	names := make([]string, len(a.pages))
-	pageWidgets := make([]ui.Widget, len(a.pages))
-	for i, p := range a.pages {
-		names[i] = p.name
-		pageWidgets[i] = p.root
+	a.initLive()
+	a.initDemos()
+	// The pages: all built at the end of setup (BuildAll below).
+	type pageDef struct {
+		name  string
+		build func() *page
+		demo  demo
 	}
+	defs := []pageDef{
+		{"Demos", a.pageDemos, a.menu},
+		{"Dash", a.pageDashboard, nil}, {"Gauge", a.pageGauges, nil}, {"Ctrl", a.pageControls, nil},
+		{"Image", a.pagePictures, nil}, {"Flow", a.pageLayouts, nil}, {"List", a.pageList, nil}, {"Log", a.pageLog, nil},
+		{"Life", a.pageLife, a.life}, {"Water", a.pageWater, a.water}, {"Fire", a.pageFire, a.fire},
+		{"Pong", a.pagePong, a.pong}, {"Boids", a.pageBoids, a.boids},
+	}
+	names := make([]string, len(defs))
+	specs := make([]container.PageSpec, len(defs))
+	a.built = make([]*page, len(defs))
+	a.demoOf = make([]demo, len(defs))
+	for i, d := range defs {
+		names[i] = d.name
+		a.demoOf[i] = d.demo
+		specs[i] = container.PageSpec{Name: d.name, Build: func() ui.Widget {
+			p := d.build()
+			p.demo = d.demo
+			a.built[i] = p
+			return p.root
+		}}
+	}
+	a.pages = container.NewPages(ScreenW, bodyH, specs, container.WithHistory(pagesHistory)) // default: every page kept
+	a.imagePage = a.pageIndex("Image")
 	a.tabs = newTabBar(ScreenW, tabsH, names)
-	a.pager = widget.NewInteractiveWidgetChoice[ui.Widget](ScreenW, bodyH, pageWidgets)
 	a.footer = widget.NewLabel(ScreenW-8, footerH-3, fontBody, a.footerText, colMuted)
 	a.root = container.New[ui.Widget](ScreenW, ScreenH,
 		container.WithLayout[ui.Widget](layout.VList(0)),
-		container.WithChildren[ui.Widget](a.tabs, a.pager, a.footer),
+		container.WithChildren[ui.Widget](a.tabs, a.pages, a.footer),
 	)
 	a.overlay = container.NewOverlay(a.root)
 	a.ctx = ui.NewContext(d, ScreenW, ScreenH, 0, 0)
@@ -212,15 +256,12 @@ func New(d ui.Displayer, hw Hardware, cfg Config, now time.Time) *App {
 		return a.txtSaver.reset().str("tinygui ").pad2(s / 60 % 60).str(":").pad2(s % 60).String()
 	}, &colAccent)
 
-	for _, p := range a.pages {
-		n := 0
-		p.nav.Walk(func(ui.Path) bool { n++; return true })
-		a.nodes += n
-	}
+	a.initMenuDialogs()
+	a.pages.BuildAll() // every page now: nothing is built (allocated) later
+	a.showPage(0)
 	a.applyLED()
 	hw.SetBacklight(a.backlight)
 	a.log("tinygui showcase ready")
-	a.logf("tree nodes", a.nodes)
 	return a
 }
 
@@ -268,7 +309,7 @@ func (a *App) Update(now time.Time) {
 	}
 	a.phase = (a.phase + 3) & 255
 	a.full = nil
-	if d := a.pages[a.cur].demo; d != nil {
+	if d := a.demoOf[a.cur]; d != nil {
 		d.tick()
 		a.full = d.fullGrid()
 	}
@@ -276,11 +317,11 @@ func (a *App) Update(now time.Time) {
 		w, h := a.full.Size()
 		a.fullCtx = ui.NewContext(a.d, ScreenW, ScreenH, int16(ScreenW-int(w))/2, int16(ScreenH-int(h))/2)
 	}
-	if a.pages[a.cur] == a.picturesPage { // only animate the plasma while it is visible
+	if a.cur == a.imagePage { // only animate the plasma while it is visible
 		renderPlasma(a.plasma[:], plasmaW, plasmaH, a.phase)
 	}
 	if !a.editing {
-		a.pages[a.cur].root.Interact(ui.IDLE) // container idle timeout clears focus
+		a.page().root.Interact(ui.IDLE) // container idle timeout clears focus
 	}
 
 	a.frames++
@@ -289,7 +330,8 @@ func (a *App) Update(now time.Time) {
 		a.sampleHeap()
 		a.frames = 0
 		a.fpsT = now
-		a.infoLines[0] = "Navigator depth " + itoa(a.pages[a.cur].nav.Depth()) + ", tree nodes " + itoa(a.nodes)
+		a.infoLines[0] = a.txtInfo.reset().str("Navigator depth ").int(a.page().nav.Depth()).
+			str(", pages built ").int(a.pages.Built()).String()
 		a.infoLines[1] = "Serial: send 'help'. USER hold >1s: screensaver."
 		a.info.SetLines(a.infoLines[:])
 	}
@@ -373,7 +415,7 @@ func (a *App) Press(b Button, long bool) {
 		a.saver = false
 		return
 	}
-	if a.full != nil && a.pages[a.cur].demo.fullPress(b) {
+	if a.full != nil && a.demoOf[a.cur].fullPress(b) {
 		return
 	}
 	if a.overlay.Top() != nil { // a dialog or list is open: it gets the buttons
@@ -382,7 +424,7 @@ func (a *App) Press(b Button, long bool) {
 		}
 		return
 	}
-	p := a.pages[a.cur]
+	p := a.page()
 	// Base's idle timer only sees Interact calls, not navigator moves; any
 	// non-navigation command (USER is ignored by containers) marks activity.
 	p.root.Interact(ui.USER)
@@ -393,9 +435,9 @@ func (a *App) Press(b Button, long bool) {
 		}
 		step := 1
 		if long {
-			step = len(a.pages) - 1
+			step = a.pages.Count() - 1
 		}
-		a.showPage((a.cur + step) % len(a.pages))
+		a.showPage((a.cur + step) % a.pages.Count())
 	case BtnUp, BtnDown:
 		if a.editing {
 			cmd := ui.UP
@@ -427,8 +469,12 @@ func (a *App) Press(b Button, long bool) {
 			a.cancelEdit()
 			return
 		}
-		if p.demo == a.menu && p.nav.Depth() == 1 {
-			a.menuOptions() // nothing to go back to on the Demos page
+		if p.nav.Depth() == 1 && !p.root.Active() { // nothing to leave inside the page
+			if p.demo == a.menu {
+				a.menuOptions() // the home page: its options
+			} else if a.pages.Back() {
+				a.afterShow() // the page shown before (bounded history)
+			}
 			return
 		}
 		p.nav.Back()
@@ -475,7 +521,7 @@ func (a *App) enter(p *page) {
 	}
 	if f, ok := p.nav.Current().(*field); ok {
 		if _, isLabel := f.child.(*widget.Label); isLabel {
-			a.log(p.name + ": picked " + f.Name()) // plain rows: select, no edit
+			a.log3(p.name, ": picked ", f.Name()) // plain rows: select, no edit
 			a.endEdit()
 			return
 		}
@@ -484,7 +530,7 @@ func (a *App) enter(p *page) {
 }
 
 func (a *App) endEdit() {
-	p := a.pages[a.cur]
+	p := a.page()
 	top := a.top(p)
 	idx := top.Index()
 	p.nav.Back() // deactivates (OnDeactivate, OnExit) and clears the index
@@ -493,7 +539,7 @@ func (a *App) endEdit() {
 }
 
 func (a *App) cancelEdit() {
-	a.pages[a.cur].nav.Current().Interact(ui.ESC)
+	a.page().nav.Current().Interact(ui.ESC)
 	a.endEdit()
 }
 
@@ -508,18 +554,40 @@ func (a *App) top(p *page) ui.Navigable {
 	return p.root
 }
 
+// page is the page on screen (always built: container.Pages builds it).
+func (a *App) page() *page { return a.built[a.cur] }
+
+// pageIndex is the index of the page named name, -1 if there is none.
+func (a *App) pageIndex(name string) int {
+	for i := range a.pages.Count() {
+		if a.pages.Name(i) == name {
+			return i
+		}
+	}
+	return -1
+}
+
 func (a *App) showPage(i int) {
-	a.cur = i
-	a.pager.Selector().SetIndex(i, true)
-	a.tabs.setActive(i, a.now.UnixMicro())
-	p := a.pages[i]
+	a.pages.Show(i)
+	a.afterShow()
+}
+
+// afterShow brings the rest of the UI to the page container.Pages shows.
+func (a *App) afterShow() {
+	a.cur = a.pages.Index()
+	// the last page's full-screen view is stale until the next Update: a
+	// button in between went to the new page's fullPress (nil demo state:
+	// crash; review R-TG-1 T1, e.g. console "c" then "a" in one Update)
+	a.full = nil
+	a.tabs.setActive(a.cur, a.now.UnixMicro())
+	p := a.page()
 	// Pages that were off screen still have the idle clock of their last
 	// visit; mark activity so the next Update's IDLE doesn't clear the focus.
 	p.root.Interact(ui.USER)
 	if p.root.Index() < 0 && p.nav.Depth() == 1 {
 		p.nav.Focus(0) // a page shown after an idle timeout starts focused
 	}
-	a.log("page " + a.pages[i].name)
+	a.log2("page ", p.name)
 }
 
 func childSelected(w ui.Widget) bool {
@@ -555,7 +623,7 @@ func (a *App) setAccent(i int) {
 	colAccent = accents[i]
 	a.lightGauge.Foreground = colAccent
 	a.hGauge.Foreground = colAccent
-	a.log("accent " + accentNames[i])
+	a.log2("accent ", accentNames[i])
 }
 
 // ---- log ----
@@ -563,7 +631,7 @@ func (a *App) setAccent(i int) {
 // logCapacity is how many lines the Log page keeps; logRing has one spare
 // slot so a line is never overwritten while the log still shows it.
 const (
-	logCapacity = 64
+	logCapacity = 16 // lines kept (56 B each): the heap needs 30 KB free after setup (Leader 2026-11-13)
 	logLineLen  = 56
 )
 
@@ -571,19 +639,26 @@ const (
 // string view of the copy. The log's lines then live in one block of the App
 // instead of as 64 small strings scattered over the heap, which fragmented
 // it until the PNG decoder's ≈ 13 KB allocation no longer fit (badge OOM).
-func (a *App) log(line string) {
-	if a.logView != nil {
-		slot := &a.logRing[a.logNext]
-		a.logNext = (a.logNext + 1) % len(a.logRing)
-		n := copy(slot[:], line)
-		a.logView.Append(unsafe.String(&slot[0], n))
-	}
+func (a *App) log(line string) { a.log3(line, "", "") }
+
+func (a *App) log2(p1, p2 string) { a.log3(p1, p2, "") }
+
+// log3 logs p1+p2+p3 without building the string: the parts are copied
+// into the ring's slot (truncated to logLineLen).
+func (a *App) log3(p1, p2, p3 string) {
+	slot := &a.logRing[a.logNext]
+	a.logNext = (a.logNext + 1) % len(a.logRing)
+	n := copy(slot[:], p1)
+	n += copy(slot[n:], p2)
+	n += copy(slot[n:], p3)
+	line := unsafe.String(&slot[0], n)
+	a.logView.Append(line)
 	if a.cfg.Log != nil {
 		a.cfg.Log(line)
 	}
 }
 
-func (a *App) logf(what string, v int) { a.log(what + " " + itoa(v)) }
+func (a *App) logf(what string, v int) { a.log3(what, " ", a.txtLog.reset().int(v).String()) }
 
 // navLogger is a ui.NavigatorObserver writing focus changes to the log.
 type navLogger struct {
@@ -600,18 +675,13 @@ func (n navLogger) OnNavigatorEvent(ev ui.NavigatorEvent) {
 	switch ev.Type {
 	case ui.NavigatorEventFocusChanged:
 		if name != "" {
-			n.a.log(n.page.name + ": focus " + name)
+			n.a.log3(n.page.name, ": focus ", name)
 		}
 	case ui.NavigatorEventActivated:
-		n.a.log(n.page.name + ": edit " + name)
+		n.a.log3(n.page.name, ": edit ", name)
 	case ui.NavigatorEventDeactivated:
-		n.a.log(n.page.name + ": done")
+		n.a.log2(n.page.name, ": done")
 	}
-}
-
-func itoa(v int) string {
-	var t textBuf
-	return string(t.int(v).b[:t.n])
 }
 
 func btoi(b bool) int {
