@@ -1,6 +1,7 @@
 package app
 
 import (
+	"runtime"
 	"slices"
 	"testing"
 )
@@ -68,6 +69,43 @@ func TestFireFuelIsAThinLayer(t *testing.T) {
 	}
 	if cols*10 < fireW*7 {
 		t.Errorf("the fuel covers %d of %d columns: want most of the floor", cols, fireW)
+	}
+}
+
+// Water's tile on the Demos page runs the shared engine with fewer
+// particles (owner: "subwindow in preview could run smaller resolution
+// (less particles) to speed up the preview"); its page and full screen run
+// the whole basin; switching between them allocates nothing.
+func TestWaterPreviewRunsFewerParticles(t *testing.T) {
+	a, frame := framedApp()
+	share := a.water.share
+	a.showPage(a.pageIndex("Demos"))
+	frame()
+	if share.owner != a.water || share.fl.Count() != waterPreviewN {
+		t.Fatalf("on Demos: %d particles (Water owns it: %v), want the preview's %d", share.fl.Count(), share.owner == a.water, waterPreviewN)
+	}
+	a.showPage(a.pageIndex("Water"))
+	frame()
+	if share.fl.Count() != waterN {
+		t.Fatalf("on the Water page: %d particles, want %d", share.fl.Count(), waterN)
+	}
+	a.showPage(a.pageIndex("Fire"))
+	frame()
+	if share.owner != a.fire || share.fl.Count() != fireN {
+		t.Fatalf("on the Fire page: %d particles, want the fuel's %d", share.fl.Count(), fireN)
+	}
+	if runtime.Compiler != "gc" { // Go's type-assertion caches fill at random (go-soak-allocs)
+		needMallocCount(t)
+		switching := func() {
+			a.showPage(a.pageIndex("Demos"))
+			frame()
+			a.showPage(a.pageIndex("Water"))
+			frame()
+		}
+		switching()
+		if n := testing.AllocsPerRun(10, switching); n != 0 {
+			t.Fatalf("%.0f allocations switching Demos ↔ Water", n)
+		}
 	}
 }
 

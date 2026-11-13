@@ -63,8 +63,12 @@ func newWater(share *liquidShare) *water {
 }
 
 // claim takes the shared engine for Water (its page or full screen is
-// shown), laying the basin afresh if Fire had it.
+// shown), laying the basin afresh if Fire had it or the tile ran fewer.
 func (w *water) claim() { w.claimN(waterN) }
+
+// preview takes the engine for Water's Demos tile: fewer particles, a
+// quicker step (owner 2026-11-13).
+func (w *water) preview() { w.claimN(waterPreviewN) }
 
 func (w *water) claimN(n int) {
 	if w.share.claim(w, n) {

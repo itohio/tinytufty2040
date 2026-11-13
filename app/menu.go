@@ -117,6 +117,9 @@ func (m *menu) tick() {
 		steps = 0
 	}
 	for _, t := range m.tiles {
+		if p, ok := t.d.(interface{ preview() }); ok {
+			p.preview() // Water's tile: the engine with fewer particles
+		}
 		t0 := time.Now()
 		for range steps {
 			t.d.tick()

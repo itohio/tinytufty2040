@@ -176,7 +176,8 @@ func (f *flipFluid) wasPicked(i, k int) bool {
 // 2026-11-13): one liquid demo is active at a time; showing the other
 // claims the engine and lays its liquid afresh. The inactive one doesn't
 // step: its tile keeps its last frame. Each claims the amount it needs
-// (owner 2026-11-13): Water a basin, Fire a thin layer of fuel.
+// (owner 2026-11-13): Water a basin, Fire a thin layer of fuel, Water's
+// Demos tile fewer particles than its page (a quicker preview).
 type liquidShare struct {
 	fl    fluid
 	owner any
@@ -185,8 +186,9 @@ type liquidShare struct {
 
 // The amounts of liquid (particles; the engine holds liquidN).
 const (
-	waterN = liquidN // the Water page and full screen: a basin a third full
-	fireN  = 32      // Fire's fuel: a thin layer on the floor (2 of 48 raster rows, about 4 %; the floor covered)
+	waterN        = liquidN // the Water page and full screen: a basin a third full
+	waterPreviewN = 150     // Water's tile on Demos: about half the step time of 400
+	fireN         = 32      // Fire's fuel: a thin layer on the floor (2 of 48 raster rows, about 4 %; the floor covered)
 )
 
 // claim makes d the engine's user with n units of liquid, re-seeding it
