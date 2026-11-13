@@ -74,6 +74,7 @@ var firePalette = func() []color.RGBA {
 
 type fire struct {
 	pinned    bool                 // dir was picked by hand: the IMU's tilt waits until the page is shown again
+	laidDir   int                  // the direction the tile's own fuel layer was laid for (layFuel), -1: none
 	share     *liquidShare         // the engine, shared with Water (fluid.go)
 	fl        fluid                // the fuel
 	g         [2]float32           // the gravity Fire last set (screen axes, m/s²), passed on after a claim
@@ -93,7 +94,7 @@ type fire struct {
 }
 
 func newFire(share *liquidShare) *fire {
-	f := &fire{share: share, fl: share.fl, height: 1, g: [2]float32{0, gravity}}
+	f := &fire{share: share, fl: share.fl, height: 1, g: [2]float32{0, gravity}, laidDir: -1}
 	f.grid = newFireView(f, heatW, heatH)
 	f.full = newFireView(f, ScreenW, ScreenH)
 	f.tiles = [2]*fireView{newFireView(f, tileW, tileH), newFireView(f, 2*tileW, 2*tileH)}
@@ -178,6 +179,9 @@ func (f *fire) step() {
 	if f.active() {
 		f.fl.Step()
 		f.fl.Raster(f.occ[:], fireW, fireH)
+		f.laidDir = -1
+	} else if f.laidDir != f.dir {
+		f.layFuel() // Water holds the engine: the fuel can't flow, so it's laid where it would lie
 	}
 	f.spread()
 	f.markFuel()
@@ -352,4 +356,34 @@ func (a *App) pageFire() *page {
 	)
 	p.demo = f
 	return p
+}
+
+// layFuel lays the fuel as a thin layer on the floor gravity points at
+// (lattice direction dir), inside the engine box's walls, as thick as the
+// engine's own layer: the Fire tile's fuel while Water holds the shared
+// engine on the Demos page. Without it the fuel stayed where it last lay
+// while the flames followed the IMU, and a badge held sideways showed flames
+// rising sideways from the old floor (owner, TG-5 #1).
+func (f *fire) layFuel() {
+	clear(f.occ[:])
+	g := gravityVec[f.dir&7]
+	wx, wy := (fireW+liquidW-1)/liquidW, (fireH+liquidH-1)/liquidH // the wall ring, in raster cells
+	band := fireFuelRows
+	if g[0] != 0 && g[1] != 0 {
+		band = fireFuelRows * 3 / 2 // diagonal: the same depth across the corner
+	}
+	hmax := -1 << 30
+	for y := wy; y < fireH-wy; y++ {
+		for x := wx; x < fireW-wx; x++ {
+			hmax = max(hmax, x*g[0]+y*g[1])
+		}
+	}
+	for y := wy; y < fireH-wy; y++ {
+		for x := wx; x < fireW-wx; x++ {
+			if x*g[0]+y*g[1] > hmax-band {
+				f.occ[y*fireW+x] = 1
+			}
+		}
+	}
+	f.laidDir = f.dir
 }

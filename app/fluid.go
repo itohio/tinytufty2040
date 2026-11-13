@@ -189,6 +189,7 @@ const (
 	waterN        = liquidN // the Water page and full screen: a basin a third full
 	waterPreviewN = 150     // Water's tile on Demos: about half the step time of 400
 	fireN         = 32      // Fire's fuel: a thin layer on the floor (2 of 48 raster rows, about 4 %; the floor covered)
+	fireFuelRows  = 2       // … and the rows it fills on the 64×48 raster (layFuel lays the tile's to match)
 )
 
 // claim makes d the engine's user with n units of liquid, re-seeding it

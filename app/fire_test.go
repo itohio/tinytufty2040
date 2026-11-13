@@ -212,3 +212,36 @@ func TestPickedGravityHoldsAgainstTheIMU(t *testing.T) {
 		t.Fatal("shown again, Fire still holds the pick: want the badge's gravity")
 	}
 }
+
+// The Fire tile on the Demos page burns the same way up as the Fire page,
+// whichever way the badge is held (owner, TG-5 #1: the preview's orientation
+// was wrong). On Demos, Water holds the shared engine, so Fire's fuel used to
+// stay where it last lay while the flames followed the IMU: turned to the
+// side, the flames rose sideways from fuel on the old floor. The fuel must
+// lie on the floor gravity points at, and the flames rise from it.
+func TestFireTileFuelLiesOnTheCurrentFloor(t *testing.T) {
+	for _, d := range []int{0, 2, 4, 6} { // down, left, up, right
+		share := newTestShare()
+		f := newFire(share)
+		newWater(share) // Water holds the engine, as on the Demos page
+		f.tilt(gravityOf(d))
+		for range 60 {
+			f.step()
+		}
+		fx, fy, ok := centroid(fireW, fireW*fireH, 1, func(i int) bool { return f.occ[i] != 0 })
+		if !ok {
+			t.Fatalf("gravity %s: no fuel on the tile", gravityNames[d])
+		}
+		g := gravityVec[d]
+		// the fuel's position along gravity, from the box's centre: near the
+		// floor means well past the centre (a quarter of the box)
+		along := (fx-fireW/2)*float64(g[0]) + (fy-fireH/2)*float64(g[1])
+		half := float64(fireH) / 2
+		if g[0] != 0 {
+			half = float64(fireW) / 2
+		}
+		if along < half/2 {
+			t.Errorf("gravity %s: the tile's fuel sits %.1f cells along gravity from the centre, want on the floor (> %.0f)", gravityNames[d], along, half/2)
+		}
+	}
+}
