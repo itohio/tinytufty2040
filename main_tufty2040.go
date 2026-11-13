@@ -131,10 +131,13 @@ func main() {
 			a.UserHold(ui.PeekButton(machine.BUTTON_USER)) // blocks until release
 		}
 		if now.Sub(last) >= frameTime {
+			period := now.Sub(last) // start to start: everything the loop did since the last frame
 			last = now
 			m0 := mallocs()
-			imuDrain(a) // every sample since the last frame (100 Hz): the shared motion state
+			bus, samples := imuDrain(a) // every sample since the last frame (100 Hz): the shared motion state
+			tIMU := time.Now()
 			a.Update(now)
+			tUpd := time.Now()
 			m1 := mallocs()
 			if dumping = a.TakeDump(); dumping {
 				con.Stream() // header, pixels, END: nothing else in between
@@ -159,6 +162,7 @@ func main() {
 				push += time.Since(t1)
 			}
 			a.ReportTiming(draw, push)
+			a.ReportProfile(period, tIMU.Sub(now), bus, samples, tUpd.Sub(tIMU), draw, push)
 			a.ReportFrame(time.Since(now))
 			a.ReportAllocs(int(m1-m0), int(md), int(mp))
 			if dumping {

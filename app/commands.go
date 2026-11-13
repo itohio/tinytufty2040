@@ -87,6 +87,7 @@ func (a *App) exec(c command) {
 			str(" page ").int(a.cur).str(" edit ").int(btoi(a.editing)).String())
 		a.memReport() // live and free after a collection: heap_alloc counts uncollected garbage
 		a.log(a.txtStat.reset().str("frame allocs update ").int(a.allocU).str(" draw ").int(a.allocD).str(" push ").int(a.allocP).String())
+		a.profileReport()
 	case "tiles": // frame budget of each demo tile on the Demos page
 		a.menu.report(a.log, &a.txtStat)
 	case "light": // the phototransistor's last reading; light <raw> forces a reading (0: darkest), light -1 the real sensor again

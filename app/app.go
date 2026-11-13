@@ -161,6 +161,7 @@ type App struct {
 	fps            int
 	fpsT           time.Time
 	drawUS, pushUS int64
+	prof           frameProfile
 	nodes          int
 
 	logRing [logCapacity + 1][logLineLen]byte

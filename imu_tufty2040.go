@@ -137,26 +137,33 @@ func fifoStart() error {
 
 // imuDrain feeds every sample waiting in the FIFO to the app, at the
 // sensor's own period. After an overflow (a stall longer than 0.85 s) the
-// FIFO restarts: samples are lost, none are misread.
-func imuDrain(a *app.App) {
+// FIFO restarts: samples are lost, none are misread. For the frame profile
+// it returns its time on the I2C bus and the samples fed: the rest of its
+// time is the motion maths (SetIMU).
+func imuDrain(a *app.App) (bus time.Duration, samples int) {
 	if mpu == nil {
-		return
+		return 0, 0
 	}
+	t0 := time.Now()
 	var st [1]byte
 	if mpuRead(regIntStatus, st[:]) == nil && st[0]&0x10 != 0 {
 		_ = fifoStart()
-		return
+		return time.Since(t0), 0
 	}
 	if mpuRead(regFIFOCount, fifoCnt[:]) != nil {
-		return
+		return time.Since(t0), 0
 	}
+	bus = time.Since(t0)
 	n := (int(fifoCnt[0])<<8 | int(fifoCnt[1])) / fifoSample
 	cfg := mpu.Config()
 	dt := 1 / cfg.SampleRate()
 	for n > 0 {
 		k := min(n, fifoBatch)
-		if mpuRead(regFIFORW, fifoR[:k*fifoSample]) != nil {
-			return
+		t1 := time.Now()
+		err := mpuRead(regFIFORW, fifoR[:k*fifoSample])
+		bus += time.Since(t1)
+		if err != nil {
+			return bus, samples
 		}
 		for i := range k {
 			b := fifoR[i*fifoSample:]
@@ -168,9 +175,11 @@ func imuDrain(a *app.App) {
 			s := cfg.Scale(r)
 			// the chip faces away from the screen: badge right = −X, up = +Y, out = −Z
 			a.SetIMU([3]float32{-s.Accel[0], s.Accel[1], -s.Accel[2]}, [3]float32{-s.Gyro[0], s.Gyro[1], -s.Gyro[2]}, dt)
+			samples++
 		}
 		n -= k
 	}
+	return bus, samples
 }
 
 // imuRead prints n samples, 10 per second: accel m/s², gyro rad/s ×1000,
