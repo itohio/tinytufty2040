@@ -23,6 +23,15 @@ func badgeAxes(roll float64) (x, y, z [3]float64) {
 
 func dot(a, b [3]float64) float64 { return a[0]*b[0] + a[1]*b[1] + a[2]*b[2] }
 
+// imuFrame feeds one sample and hands the motion state to the demos, as the
+// firmware's drain and the Update after it do; here every sample is a frame
+// (the demos' state at a frame is the same either way: the hand-off only
+// stores the latest values).
+func imuFrame(a *App, acc, gyro [3]float32, dt float32) {
+	a.SetIMU(acc, gyro, dt)
+	a.frameMotion()
+}
+
 // drive feeds n samples of a scripted motion: roll(t) (radians) and the
 // world acceleration of the badge acc(t) (m/s²). The sensor reads the
 // specific force f = R^T(a + g ẑ) in the badge's axes and the rate about its
@@ -38,7 +47,7 @@ func drive(a *App, t0 *float64, n int, roll func(t float64) float64, acc func(t 
 		w := acc(t)
 		w[2] += gravity
 		f := [3]float32{float32(dot(x, w)), float32(dot(y, w)), float32(dot(z, w))}
-		a.SetIMU(f, [3]float32{0, 0, float32(-rate)}, dt)
+		imuFrame(a, f, [3]float32{0, 0, float32(-rate)}, dt)
 		if each != nil {
 			each(i)
 		}
@@ -237,7 +246,7 @@ func TestSettlesDespiteAnAccelerometerScaleError(t *testing.T) {
 		a := testApp()
 		a.motion = newMotion()
 		for range 3 * imuRate {
-			a.SetIMU([3]float32{0, gravity * scale, 0}, [3]float32{}, 1.0/imuRate)
+			imuFrame(a, [3]float32{0, gravity * scale, 0}, [3]float32{}, 1.0/imuRate)
 		}
 		if !a.motion.settled {
 			t.Errorf("accelerometer ×%.3f at rest: not settled after 3 s", scale)
@@ -342,7 +351,7 @@ func TestStillBadgeKeepsThePaddleStill(t *testing.T) {
 		sample := func() {
 			acc := [3]float32{float32(r.NormFloat64() * 0.02), gravity + float32(r.NormFloat64()*0.02), float32(r.NormFloat64() * 0.02)}
 			gyro := [3]float32{bias[0] + float32(r.NormFloat64()*0.003), bias[1] + float32(r.NormFloat64()*0.003), bias[2] + float32(r.NormFloat64()*0.003)}
-			a.SetIMU(acc, gyro, 1.0/imuRate)
+			imuFrame(a, acc, gyro, 1.0/imuRate)
 		}
 		for range 5 * imuRate { // boot: the filter settles, the bias is learnt
 			sample()
@@ -383,7 +392,7 @@ func TestStillBadgeRightAfterBootKeepsPaddleAndWindowStill(t *testing.T) {
 	sample := func() {
 		acc := [3]float32{off[0] + float32(r.NormFloat64()*0.02), gravity*0.99 + off[1] + float32(r.NormFloat64()*0.02), off[2] + float32(r.NormFloat64()*0.02)}
 		gyro := [3]float32{gbias[0] + float32(r.NormFloat64()*0.003), gbias[1] + float32(r.NormFloat64()*0.003), gbias[2] + float32(r.NormFloat64()*0.003)}
-		a.SetIMU(acc, gyro, 1.0/imuRate)
+		imuFrame(a, acc, gyro, 1.0/imuRate)
 	}
 	for range 3 * imuRate { // boot: just long enough to settle
 		sample()
@@ -430,7 +439,7 @@ func TestNoisyStillBadgeKeepsPaddleAndWindowStill(t *testing.T) {
 		n := func(s float64) float32 { return float32(r.NormFloat64() * s) }
 		acc := [3]float32{off[0] + n(0.04), gravity*0.99 + off[1] + n(0.04), off[2] + n(0.04)}
 		gyro := [3]float32{gb[0] + n(0.005), gb[1] + n(0.005), gb[2] + n(0.005)}
-		a.SetIMU(acc, gyro, 1.0/imuRate)
+		imuFrame(a, acc, gyro, 1.0/imuRate)
 	}
 	for range 3 * imuRate {
 		sample()

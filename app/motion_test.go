@@ -16,7 +16,7 @@ func TestIMUBiasAndGravity(t *testing.T) {
 	acc := [3]float32{float32(-gravity * math.Sin(r)), float32(gravity * math.Cos(r)), 0}
 	bias := [3]float32{0.012, -0.02, 0.031}
 	for range 600 { // 40 s at 15 Hz
-		a.SetIMU(acc, bias, 1.0/15)
+		imuFrame(a, acc, bias, 1.0/15)
 	}
 	m := a.motion
 	for i := range bias {
@@ -68,11 +68,11 @@ func TestMotionPathFollowsAPush(t *testing.T) {
 		return v
 	}
 	for range 20 * imuRate { // 20 s at 100 Hz (the FIFO's rate): bias learnt, orientation settled
-		a.SetIMU(noisy(up, 0.05), noisy([3]float32{}, 0.005), 1.0/imuRate)
+		imuFrame(a, noisy(up, 0.05), noisy([3]float32{}, 0.005), 1.0/imuRate)
 	}
 	m.resetPath()
 	for range 10 * imuRate { // 10 s more at rest
-		a.SetIMU(noisy(up, 0.05), noisy([3]float32{}, 0.005), 1.0/imuRate)
+		imuFrame(a, noisy(up, 0.05), noisy([3]float32{}, 0.005), 1.0/imuRate)
 	}
 	if d := math.Hypot(math.Hypot(float64(m.nav.P[0]), float64(m.nav.P[1])), float64(m.nav.P[2])); d > 0.005 {
 		t.Fatalf("10 s at rest: the path moved %.1f cm, want < 0.5", d*100)
@@ -80,7 +80,7 @@ func TestMotionPathFollowsAPush(t *testing.T) {
 	right := toWorld(m.ahrs.Output(), [3]float32{1, 0, 0})
 	push := func(ax float32, n int) {
 		for range n {
-			a.SetIMU([3]float32{ax, gravity, 0}, [3]float32{}, 1.0/imuRate)
+			imuFrame(a, [3]float32{ax, gravity, 0}, [3]float32{}, 1.0/imuRate)
 		}
 	}
 	push(1.5, 20) // 0.2 s
@@ -110,11 +110,11 @@ func TestPongPaddleFollowsTheBadge(t *testing.T) {
 	m, p := a.motion, a.pong
 	upright := [3]float32{0, gravity, 0}
 	sample := func(ay float32) {
-		a.SetIMU([3]float32{0, gravity + ay, 0}, [3]float32{}, 1.0/15)
+		imuFrame(a, [3]float32{0, gravity + ay, 0}, [3]float32{}, 1.0/15)
 		p.tick()
 	}
 	for range 300 { // settle at rest
-		a.SetIMU(upright, [3]float32{}, 1.0/15)
+		imuFrame(a, upright, [3]float32{}, 1.0/15)
 	}
 	p.pad[0] = (pongH - pongPadLen) * pongFix // start at the bottom: room to rise 40 cells
 	p.showFull()
@@ -191,10 +191,10 @@ func TestBadgeAnglesReadZeroUpright(t *testing.T) {
 		a.motion = newMotion()
 		m := a.motion
 		for range 600 {
-			a.SetIMU(c.acc, [3]float32{}, 1.0/15)
+			imuFrame(a, c.acc, [3]float32{}, 1.0/15)
 		}
 		m.resetPath()
-		a.SetIMU(c.acc, [3]float32{}, 1.0/15)
+		imuFrame(a, c.acc, [3]float32{}, 1.0/15)
 		r, p, y := deg(m.rpy[0]), deg(m.rpy[1]), deg(m.rpy[2])
 		if math.Abs(r-c.roll) > 1 || math.Abs(p-c.pitch) > 1 || math.Abs(y) > 1 {
 			t.Errorf("%s: roll %.1f pitch %.1f yaw %.1f, want %.0f, %.0f, 0", c.name, r, p, y, c.roll, c.pitch)

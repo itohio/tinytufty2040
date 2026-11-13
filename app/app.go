@@ -302,6 +302,7 @@ func (a *App) Update(now time.Time) {
 		}
 		break
 	}
+	a.frameMotion() // the IMU samples drained before this Update, handed to the demos once
 	us := now.UnixMicro()
 	if now.Sub(a.lastSample) >= a.samplePeriod {
 		a.lastSample = now

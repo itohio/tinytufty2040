@@ -57,11 +57,12 @@ type motion struct {
 	ahrs     *ahrs.MahonyAHRS
 	in       mat.Matrix3x3 // accel, gyro, mag rows; passed by pointer (no boxing)
 	bias     [3]float32
-	biasN    int  // rest samples in the first estimate (restFirst: done)
-	resting  bool // the last sample was at rest
-	up       [3]float32
+	biasN    int        // rest samples in the first estimate (restFirst: done)
+	resting  bool       // the last sample was at rest
+	up       [3]float32 // world up in the badge's frame, once a frame (frameMotion)
+	fresh    bool       // samples arrived since the last frameMotion
 	samples  int
-	rpy      [3]float32 // roll, pitch, yaw (rad), badge-relative: see badgeEuler
+	rpy      [3]float32 // roll, pitch, yaw (rad), badge-relative, once a frame: see badgeEuler
 	yaw0     float32    // the yaw at the last path reset: yaw is shown from there
 	lastGyro [3]float32 // after the bias
 	// the path: EasyRobot's strapdown brick (x/math/nav/strapdown) on the
@@ -103,7 +104,8 @@ func newMotion() *motion {
 // SetIMU feeds one IMU sample (accelerometer m/s², gyro rad/s, sensor =
 // badge axes) taken dt seconds after the previous one: every sample (the
 // firmware drains the sensor's FIFO, 100 Hz), before Update. It updates the
-// shared motion state and hands it to the demos (applyMotion).
+// shared motion state; Update hands it to the demos once a frame
+// (frameMotion).
 func (a *App) SetIMU(acc, gyro [3]float32, dt float32) {
 	m := a.motion
 	if m == nil {
@@ -126,11 +128,6 @@ func (a *App) SetIMU(acc, gyro [3]float32, dt float32) {
 	}
 	m.ahrs.Update(dt, &m.in)
 	q := m.ahrs.Output()
-	q0, q1, q2, q3 := q[0], q[1], q[2], q[3]
-	// world up in the badge's frame (what a resting accelerometer measures)
-	m.up = [3]float32{2 * (q1*q3 - q0*q2), 2 * (q0*q1 + q2*q3), q0*q0 - q1*q1 - q2*q2 + q3*q3}
-	m.rpy[0], m.rpy[1], m.rpy[2] = badgeEuler(q)
-	m.rpy[2] = wrapPi(m.rpy[2] - m.yaw0)
 	if m.settled {
 		// only once the filter has turned to the badge's pose: fed from
 		// power-on, the strapdown learnt its bias while the filter still
@@ -151,6 +148,26 @@ func (a *App) SetIMU(acc, gyro [3]float32, dt float32) {
 	for i := range acc {
 		m.force[i] += (acc[i] - m.force[i]) * k
 	}
+	m.fresh = true
+}
+
+// frameMotion hands the samples since the last frame to the demos, once a
+// frame (Update, after the firmware drained the sensor): the attitude as
+// world up and Euler angles, then applyMotion. The demos read these once a
+// frame; computed every sample they took 1.2 ms of the 2 ms a sample cost
+// on the badge (TG-5 5b).
+func (a *App) frameMotion() {
+	m := a.motion
+	if m == nil || !m.fresh {
+		return
+	}
+	m.fresh = false
+	q := m.ahrs.Output()
+	q0, q1, q2, q3 := q[0], q[1], q[2], q[3]
+	// world up in the badge's frame (what a resting accelerometer measures)
+	m.up = [3]float32{2 * (q1*q3 - q0*q2), 2 * (q0*q1 + q2*q3), q0*q0 - q1*q1 - q2*q2 + q3*q3}
+	m.rpy[0], m.rpy[1], m.rpy[2] = badgeEuler(q)
+	m.rpy[2] = wrapPi(m.rpy[2] - m.yaw0)
 	a.applyMotion()
 }
 

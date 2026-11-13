@@ -85,7 +85,7 @@ The Tufty 2040 has none on board: the I2C bus (GPIO4 SDA, GPIO5 SCL, GPIO3 INT) 
 - **world position:** EasyRobot's strapdown (`x/math/nav/strapdown`) on that attitude, gravity removed, held at zero velocity at rest. It is fed only once the filter has settled: fed from power-on, it learnt a bias while the filter still turned, and a tilt then moved the path metres.
 - **in the badge's own frame** (owner: "vertical position in the badge frame of reference … same for water and fire"): the displacement (each world step turned into the badge's axes as it is then, summed) and the specific force (the accelerometer: gravity plus the badge's own acceleration, low-passed over 30 ms).
 
-Who reads what (`applyMotion`):
+Who reads what (`applyMotion`, once a frame: `frameMotion` at the start of `Update`, after the firmware drained the samples; the state itself is still updated every sample):
 - Water and Fire's fuel: the specific force, so tilts and shakes move them.
 - The boids' window: turns with the attitude, moves with the displacement in the badge's own frame, 1:1 on the glass; the flock feels the badge's own acceleration.
 - Pong's paddle: the displacement along the badge's up axis, 1:1.
