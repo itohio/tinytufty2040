@@ -245,6 +245,63 @@ func TestSettlesDespiteAnAccelerometerScaleError(t *testing.T) {
 	}
 }
 
+// A shake (the badge thrown left and right, 6 m/s² at 1.5 Hz for 2 s)
+// sloshes the water and stirs the boids; a still badge does neither.
+func TestShakeSloshesWaterAndStirsBoids(t *testing.T) {
+	run := func(shake bool) (slosh, stir float64) {
+		rngState = 2463534242
+		a, tm := motionApp()
+		w, b := a.water, a.boids
+		for range 120 { // let the water settle level
+			w.step()
+		}
+		cx := func() float64 {
+			var s, n float64
+			for i, v := range w.shade {
+				if v != 0 {
+					s += float64(i % waterW)
+					n++
+				}
+			}
+			return s / n
+		}
+		speed := func() float64 {
+			var s float64
+			for i := range boidsN[b.count] {
+				s += math.Hypot(float64(b.vx[i]), float64(b.vy[i]))
+			}
+			return s / float64(boidsN[b.count])
+		}
+		c0 := cx()
+		x, _, _ := badgeAxes(0)
+		acc := func(t float64) [3]float64 {
+			if !shake {
+				return [3]float64{}
+			}
+			k := 6 * math.Sin(2*math.Pi*1.5*t)
+			return [3]float64{x[0] * k, x[1] * k, x[2] * k}
+		}
+		var top float64
+		drive(a, tm, 2*imuRate, func(float64) float64 { return 0 }, acc, func(i int) {
+			if i%3 == 2 { // a frame every 3 samples
+				w.step()
+				b.tick()
+				slosh = max(slosh, math.Abs(cx()-c0))
+				top = max(top, speed())
+			}
+		})
+		return slosh, top
+	}
+	sloshStill, stirStill := run(false)
+	sloshShake, stirShake := run(true)
+	if sloshShake < sloshStill+1 {
+		t.Errorf("shaken, the water's centre moved %.2f cells (still badge: %.2f), want at least a cell more", sloshShake, sloshStill)
+	}
+	if stirShake < stirStill*1.2 {
+		t.Errorf("shaken, the boids' top mean speed %.0f (still badge: %.0f), want 20 %% more", stirShake, stirStill)
+	}
+}
+
 // The path keeps its history while the badge rests: after a 5 cm stroke
 // right and one up, and 5 s still, it still starts where the badge started,
 // about one point per millimetre moved (comparing metres with the stored

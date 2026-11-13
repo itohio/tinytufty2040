@@ -192,6 +192,7 @@ func (a *App) initDemos(cfg Config) {
 	a.life, a.water, a.fire, a.pong, a.boids = newLife(), newWater(), newFire(), newPong(), newBoids()
 	a.life.log2, a.water.log2, a.fire.log2 = a.log2, a.log2, a.log2
 	a.pong.log, a.boids.log = a.log, a.log
+	a.tilters = []tilter{a.water} // the boids follow the whole motion state (applyMotion)
 	a.menu = a.newMenu([]string{"Life", "Water", "Fire", "Pong", "Boids"},
 		[]previewer{a.life, a.water, a.fire, a.pong, a.boids})
 	if imu {

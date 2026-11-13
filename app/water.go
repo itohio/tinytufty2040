@@ -1,26 +1,24 @@
 package app
 
 import (
+	ui "github.com/itohio/tinygui"
 	"image/color"
 	"time"
 
-	ui "github.com/itohio/tinygui"
 	"github.com/itohio/tinygui/layout"
 	"github.com/itohio/tinygui/widget"
 )
 
-// Water: a falling-liquid cellular automaton on a 64×64 grid, drawn as an
-// LED matrix on widget.CellGrid. Each step every water cell tries to move
-// along gravity, then diagonally, then sideways; the order of the scan
-// follows gravity so a cell moves at most once per step. The CellGrid shows
-// a separate shade buffer: the surface is foam, deeper water darker.
+// Water: EasyRobot's particle liquid (fluid.go), drawn as an LED matrix on widget.CellGrid: the engine's
+// raster, 64×48 (its box's aspect), shaded in place: the surface is foam,
+// deeper water darker.
 const (
-	waterN      = 64
-	waterPitch  = 3
-	waterShades = 7
-	// steps per frame: one step moves a cell by one, so a few per frame make
-	// the liquid flow at a believable speed (a step is cheap, see stepUS)
-	waterStepsPerFrame = 3
+	waterW, waterH = 64, 48
+	waterPitch     = 3
+	waterShades    = 7
+	// engine steps per frame: gravity is 0.02 cell per step² (the engine's
+	// tuning), so a couple per frame make it flow at a believable speed
+	waterStepsPerFrame = 2
 )
 
 var waterPalette = []color.RGBA{
@@ -31,15 +29,17 @@ var waterPalette = []color.RGBA{
 }
 
 type water struct {
-	liquid
-	shade  [waterN * waterN]uint8
+	fl     fluid
+	dir    int  // gravity's nearest lattice direction (buttons, the page's choice, shading)
+	pour   bool // a stream lifted from the surface pours in opposite to gravity
+	shade  [waterW * waterH]uint8
 	cells  int
 	stepUS int64
 	grid   *widget.CellGrid
-	// full-screen LED views of the same grid: 64×48 at 5 px (320×240) or
-	// 64×60 at 4 px (256×240); rows are a window chosen by gravity
+	// full-screen LED views of the same grid: 64×48 at 5 px (320×240) or at
+	// 4 px (256×192)
 	full    [2]*widget.CellGrid
-	tiles   [2]*widget.CellGrid // the Demos tile: 64×48 at 1 px, 2 px focused (pointTiles)
+	tiles   [2]*widget.CellGrid // the menu tile: at 1 and 2 px
 	fullOn  bool
 	fullIdx int
 	txt     textBuf
@@ -48,12 +48,12 @@ type water struct {
 }
 
 func newWater() *water {
-	w := &water{liquid: newLiquid(waterN, waterN)}
-	w.grid = widget.NewCellGrid(waterN, waterN, waterPitch, 1, widget.CellRound, w.shade[:], waterPalette, colBG)
-	w.full[0] = widget.NewCellGrid(waterN, 48, 5, 1, widget.CellRound, w.shade[:waterN*48], waterPalette, colBG)
-	w.full[1] = widget.NewCellGrid(waterN, 60, 4, 1, widget.CellRound, w.shade[:waterN*60], waterPalette, colBG)
-	w.tiles[0] = widget.NewCellGrid(waterN, tileH, 1, 0, widget.CellSquare, w.window(tileH), waterPalette, colBG)
-	w.tiles[1] = widget.NewCellGrid(waterN, tileH, 2, 0, widget.CellSquare, w.window(tileH), waterPalette, colBG)
+	w := &water{fl: newFlipFluid()}
+	w.grid = widget.NewCellGrid(waterW, waterH, waterPitch, 1, widget.CellRound, w.shade[:], waterPalette, colBG)
+	w.full[0] = widget.NewCellGrid(waterW, waterH, 5, 1, widget.CellRound, w.shade[:], waterPalette, colBG)
+	w.full[1] = widget.NewCellGrid(waterW, waterH, 4, 1, widget.CellRound, w.shade[:], waterPalette, colBG)
+	w.tiles[0] = widget.NewCellGrid(waterW, waterH, 1, 0, widget.CellSquare, w.shade[:], waterPalette, colBG)
+	w.tiles[1] = widget.NewCellGrid(waterW, waterH, 2, 0, widget.CellSquare, w.shade[:], waterPalette, colBG)
 	w.fill()
 	return w
 }
@@ -61,55 +61,52 @@ func newWater() *water {
 // step advances the liquid and shades it for the grid.
 func (w *water) step() {
 	t0 := time.Now()
-	w.liquid.step()
-	w.shadeCells()
-	w.pointTiles()
+	if w.pour { // two units a step, lifted from the surface, enter opposite to gravity
+		g := gravityVec[w.dir]
+		w.fl.Move(2, 0.5-float32(g[0])*0.4, 0.5-float32(g[1])*0.4)
+	}
+	w.fl.Step()
+	w.render()
 	w.stepUS = time.Since(t0).Microseconds()
 }
 
-// fill resets to a basin filled 40 % with water.
-func (w *water) fill() {
-	clear(w.state[:])
-	for y := waterN * 6 / 10; y < waterN; y++ {
-		for x := range waterN {
-			w.state[y*waterN+x] = newCell()
-		}
-	}
+func (w *water) render() {
+	w.fl.Raster(w.shade[:], waterW, waterH) // shadeCells turns it into shades in place
 	w.shadeCells()
-	w.pointTiles()
 }
+
+// fill resets to the basin's liquid lying level.
+func (w *water) fill() {
+	w.fl.Reset()
+	w.render()
+}
+
+// setTilt: gravity from the motion state (screen axes, m/s²).
+func (w *water) setTilt(gx, gy float32) {
+	w.dir, _, _ = latticeSplit(gx, gy)
+	w.fl.SetGravity(gx, gy)
+}
+
+// turn rotates gravity by steps of 45° (buttons).
+func (w *water) turn(by int) {
+	w.dir = (w.dir + by) & 7
+	w.useDir()
+}
+
+// useDir sets the engine's gravity to the lattice direction dir (the
+// buttons, the page's choice).
+func (w *water) useDir() { w.fl.SetGravity(gravityOf(w.dir)) }
+
+func (w *water) count() int { return w.fl.Count() }
 
 var waterFullNames = []string{"5 px", "4 px"}
 
-// fullView returns the full-screen grid with its rows pointed at the window
-// where the water collects. Call from Update, not Draw.
+// fullView returns the full-screen grid. Call from Update, not Draw.
 func (w *water) fullView() ui.Widget {
 	if !w.fullOn {
 		return nil
 	}
-	g := w.full[w.fullIdx]
-	g.Cells = w.window(g.Rows)
-	return g
-}
-
-// window is rows of the 64 where gravity collects the water: the bottom when
-// it pulls down, the top when up, the middle when sideways.
-func (w *water) window(rows int) []uint8 {
-	off := (waterN - rows) / 2
-	switch gravityVec[w.dir][1] {
-	case 1:
-		off = waterN - rows
-	case -1:
-		off = 0
-	}
-	return w.shade[off*waterN : (off+rows)*waterN]
-}
-
-// pointTiles points the Demos tile's rows at the window where the water
-// collects, as fullView does for the full-screen grid.
-func (w *water) pointTiles() {
-	c := w.window(tileH)
-	w.tiles[0].Cells, w.tiles[1].Cells = c, c
+	return w.full[w.fullIdx]
 }
 
 func (w *water) tileViews() (ui.Widget, ui.Widget) { return w.tiles[0], w.tiles[1] }
@@ -119,33 +116,36 @@ func (w *water) showFull()                         { w.fullOn = true }
 // index: 0 is the surface (foam), deeper is darker. A table, not a division.
 var waterDepthShade = [16]uint8{7, 6, 6, 6, 5, 5, 5, 4, 4, 4, 3, 3, 3, 2, 2, 1}
 
-// shadeCells sets the palette index of every cell. It scans from the side
-// gravity comes from, so the cell against gravity already holds its depth
-// (stored as depth+1 in shade during the scan): one read per cell.
+// shadeCells turns the engine's raster in shade (liquid per cell, 0 for
+// none) into the palette index of every cell, in place (no second 4 KB
+// buffer: the badge ran out of memory at boot with one). It scans from the
+// side gravity comes from, so the cell against gravity already holds its
+// depth (stored as depth+1 during the scan) and a cell not yet scanned
+// still holds the raster: one read per cell.
 func (w *water) shadeCells() {
 	g := gravityVec[w.dir]
 	gx, gy := g[0], g[1]
-	y0, y1, dy := 0, waterN, 1
+	y0, y1, dy := 0, waterH, 1
 	if gy < 0 {
-		y0, y1, dy = waterN-1, -1, -1
+		y0, y1, dy = waterH-1, -1, -1
 	}
-	x0, x1, dx := 0, waterN, 1
+	x0, x1, dx := 0, waterW, 1
 	if gx < 0 {
-		x0, x1, dx = waterN-1, -1, -1
+		x0, x1, dx = waterW-1, -1, -1
 	}
 	n := 0
 	for y := y0; y != y1; y += dy {
 		uy := y - gy
 		for x := x0; x != x1; x += dx {
-			i := y*waterN + x
-			if w.state[i]&liquidBit == 0 {
+			i := y*waterW + x
+			if w.shade[i] == 0 {
 				w.shade[i] = 0
 				continue
 			}
 			n++
 			d := uint8(1)
-			if ux := x - gx; ux >= 0 && uy >= 0 && ux < waterN && uy < waterN {
-				if u := w.shade[uy*waterN+ux]; u > 0 {
+			if ux := x - gx; ux >= 0 && uy >= 0 && ux < waterW && uy < waterH {
+				if u := w.shade[uy*waterW+ux]; u > 0 {
 					d = min(u+1, 16)
 				}
 			}
@@ -164,25 +164,24 @@ func (a *App) pageWater() *page {
 	w := a.water
 	grav := widget.NewInteractiveLabelChoice(52, 11, gravityNames,
 		widget.WithLabelChoiceIndex(&w.dir), widget.WithLabelChoiceFont(fontBody), widget.WithLabelChoiceColor(colFG),
-		widget.WithLabelChoiceChange(func(i int, s string) { a.log2("gravity ", s) }))
+		widget.WithLabelChoiceChange(func(i int, s string) { w.dir = i; w.useDir(); a.log2("gravity ", s) }))
 	pour := widget.NewToggle(44, 12, fontBody, colFG, "ON", "OFF", colGood, colTrack,
 		func() bool { return w.pour }, func(v bool) { w.pour = v })
 	reset := widget.NewToggle(44, 12, fontBody, colFG, "FILL", "FILL", colTrack, colTrack,
 		func() bool { return false }, func(bool) { w.fill(); a.log("water refilled") })
 	full := widget.NewToggle(44, 12, fontBody, colFG, "SHOW", "SHOW", colTrack, colTrack,
-		func() bool { return false }, func(bool) { w.fullOn = true; a.log("water full screen") })
+		func() bool { return false }, func(bool) { w.showFull(); a.log("water full screen") })
 	size := widget.NewInteractiveLabelChoice(52, 11, waterFullNames,
 		widget.WithLabelChoiceIndex(&w.fullIdx), widget.WithLabelChoiceFont(fontBody), widget.WithLabelChoiceColor(colFG))
-	const side = waterN * waterPitch // 192
 	// explicit height: findings F-33
-	p := a.newPageWith("Water", layout.VFlow(4, side),
+	p := a.newPageWith("Water", layout.VFlow(4, waterH*waterPitch),
 		still(w.grid),
 		newField("Gravity", 42, 104, grav),
 		newField("Pour", 42, 104, pour),
 		newField("Reset", 42, 104, reset),
 		newField("Full", 42, 104, full),
 		newField("LEDs", 42, 104, size),
-		still(a.text(104, func() string { return w.txt.reset().str("cells ").int(w.cells).String() }, colMuted)),
+		still(a.text(104, func() string { return w.txt.reset().str("lit ").int(w.cells).str(" of ").int(waterW * waterH).String() }, colMuted)),
 		still(a.text(104, func() string { return w.txt2.reset().str("step ").int(int(w.stepUS)).str(" us").String() }, colMuted)),
 	)
 	p.demo = w

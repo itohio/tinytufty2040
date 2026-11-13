@@ -11,6 +11,7 @@ import (
 func TestIMUBiasAndGravity(t *testing.T) {
 	a := testApp()
 	a.motion = newMotion()
+	w := a.water
 	r := 30 * math.Pi / 180 // turned clockwise: up leans towards screen-left (-X)
 	acc := [3]float32{float32(-gravity * math.Sin(r)), float32(gravity * math.Cos(r)), 0}
 	bias := [3]float32{0.012, -0.02, 0.031}
@@ -22,6 +23,11 @@ func TestIMUBiasAndGravity(t *testing.T) {
 		if d := m.bias[i] - bias[i]; d > 1e-3 || d < -1e-3 {
 			t.Fatalf("gyro bias %v, want %v", m.bias, bias)
 		}
+	}
+	// 30° clockwise: the engine's G = 1311·(sin 30°, cos 30°) = (655, 1135)
+	ff := w.fl.(*flipFluid)
+	if dx, dy := ff.gx-655, ff.gy-1135; dx < -10 || dx > 10 || dy < -10 || dy > 10 {
+		t.Fatalf("water's gravity (%d, %d), want (655, 1135): 30°", ff.gx, ff.gy)
 	}
 	// roll from the filter, within half a degree
 	if d := math.Abs(float64(m.up[0]) + math.Sin(r)); d > 0.01 {
