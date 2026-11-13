@@ -1,17 +1,20 @@
 //go:build tufty2040
 
 // Package board drives the Pimoroni Tufty 2040's panel: an ST7789 320×240 on
-// an 8-bit parallel bus (8080 write cycles), bit-banged through the RP2040 SIO
-// set/clear registers. Init sequence and orientation follow Pimoroni's driver
-// (pimoroni-pico drivers/st7789, DISPLAY_TUFTY_2040: ROTATE_180 because the
-// panel is mounted upside down).
+// an 8-bit parallel bus (8080 write cycles). Commands are bit-banged through
+// the RP2040 SIO set/clear registers; PushRect's pixel stream goes out
+// through PIO0 fed by DMA (lcdPIOSetup). Init sequence and orientation follow
+// Pimoroni's driver (pimoroni-pico drivers/st7789, DISPLAY_TUFTY_2040:
+// ROTATE_180 because the panel is mounted upside down).
 package board
 
 import (
 	"device/arm"
 	"device/rp"
 	"machine"
+	"runtime/volatile"
 	"time"
+	"unsafe"
 )
 
 const (
@@ -24,7 +27,75 @@ const (
 
 	// MADCTLRotate180 is ROW_ORDER | SWAP_XY | SCAN_ORDER (landscape, upside down).
 	MADCTLRotate180 = 0x80 | 0x20 | 0x10
+
+	// The pixel stream (TG-5 5c): bit-banged by the CPU it took 126 ns a
+	// byte, 19.3 ms a frame. PIO0's state machine 0 clocks it out at
+	// 200 MHz / lcdPIOClkDiv: 20 ns a PIO cycle, two per phase, so 80 ns a
+	// byte with WR low 40 ns and high 40 ns (ST7789: cycle ≥ 66 ns, each
+	// phase ≥ 15 ns); a DMA channel feeds it from the band.
+	lcdPIOClkDiv = 4
+	lcdSM        = 0  // PIO0 state machine
+	lcdDMA       = 10 // DMA channel (TinyGo's drivers use the low ones; the light capture 11)
+	funcSIO      = 5  // GPIO function select: SIO (bit-banged commands)
+	funcPIO0     = 6  // GPIO function select: PIO0 (the pixel stream)
+	lcdWRPin     = 12 // LCD_WR (side-set); LCD_RD (GPIO13) stays SIO, high
 )
+
+// lcdProgram is PIO0's pixel loop (side-set: one pin, WR):
+//
+//	out pins, 8  side 0 [1]  ; the next byte on DB0..7, WR low (a stalled out holds WR low: harmless, the panel latches on the rising edge)
+//	nop          side 1 [1]  ; WR high latches it
+//
+// Autopull every 16 bits, shifting left: each RGB565 pixel (a halfword the
+// DMA writes, which the bus repeats in both halves of the FIFO word) goes
+// out MSB first.
+var lcdProgram = [...]uint16{0x6108, 0xB142}
+
+// dmaChannel is one DMA channel's first four registers (RP2040 2.5.7).
+type dmaChannel struct {
+	read, write, count, ctrl volatile.Register32
+}
+
+func dmaCh(n uintptr) *dmaChannel {
+	return (*dmaChannel)(unsafe.Pointer(uintptr(unsafe.Pointer(rp.DMA)) + n*0x40))
+}
+
+// gpioCtrl is GPIO pin's IO_BANK0 control register (function select).
+func gpioCtrl(pin uintptr) *volatile.Register32 {
+	return (*volatile.Register32)(unsafe.Pointer(uintptr(unsafe.Pointer(&rp.IO_BANK0.GPIO0_CTRL)) + pin*8))
+}
+
+// lcdPinsTo selects fn (funcSIO or funcPIO0) for WR and DB0..7.
+func lcdPinsTo(fn uint32) {
+	gpioCtrl(lcdWRPin).Set(fn)
+	for pin := uintptr(lcdDataShift); pin < lcdDataShift+8; pin++ {
+		gpioCtrl(pin).Set(fn)
+	}
+}
+
+// lcdPIOSetup loads the pixel loop into PIO0 and starts state machine 0,
+// stalled with an empty FIFO; the pins stay on SIO until a push.
+func lcdPIOSetup() {
+	p := rp.PIO0
+	p.CTRL.ClearBits(1 << (rp.PIO0_CTRL_SM_ENABLE_Pos + lcdSM))
+	for i, ins := range lcdProgram {
+		(*volatile.Register32)(unsafe.Pointer(uintptr(unsafe.Pointer(&p.INSTR_MEM0)) + uintptr(i)*4)).Set(uint32(ins))
+	}
+	p.SM0_CLKDIV.Set(lcdPIOClkDiv << rp.PIO0_SM0_CLKDIV_INT_Pos)
+	p.SM0_EXECCTRL.Set(uint32(len(lcdProgram)-1) << rp.PIO0_SM0_EXECCTRL_WRAP_TOP_Pos) // wrap bottom 0
+	p.SM0_SHIFTCTRL.Set(rp.PIO0_SM0_SHIFTCTRL_FJOIN_TX | rp.PIO0_SM0_SHIFTCTRL_AUTOPULL |
+		16<<rp.PIO0_SM0_SHIFTCTRL_PULL_THRESH_Pos) // OUT_SHIFTDIR 0: left, MSB first
+	p.SM0_PINCTRL.Set(1<<rp.PIO0_SM0_PINCTRL_SIDESET_COUNT_Pos | 1<<rp.PIO0_SM0_PINCTRL_SET_COUNT_Pos |
+		8<<rp.PIO0_SM0_PINCTRL_OUT_COUNT_Pos | lcdWRPin<<rp.PIO0_SM0_PINCTRL_SIDESET_BASE_Pos |
+		lcdWRPin<<rp.PIO0_SM0_PINCTRL_SET_BASE_Pos | lcdDataShift<<rp.PIO0_SM0_PINCTRL_OUT_BASE_Pos)
+	p.SM0_INSTR.Set(0xF001)                                    // set pins, 1 side 1: WR high
+	p.SM0_INSTR.Set(0xF081)                                    // set pindirs, 1 side 1: WR an output
+	p.SM0_INSTR.Set(0xB0EB)                                    // mov osr, ~null side 1
+	p.SM0_INSTR.Set(0x7088)                                    // out pindirs, 8 side 1: DB0..7 outputs
+	p.CTRL.SetBits(1 << (rp.PIO0_CTRL_SM_RESTART_Pos + lcdSM)) // clear the OSR's shift count
+	p.SM0_INSTR.Set(0x1000)                                    // jmp 0 side 1
+	p.CTRL.SetBits(1 << (rp.PIO0_CTRL_SM_ENABLE_Pos + lcdSM))
+}
 
 // LCD is the Tufty's ST7789 panel.
 type LCD struct{}
@@ -63,6 +134,7 @@ func (l LCD) Configure() {
 	l.Command(0x29) // DISPON
 	time.Sleep(100 * time.Millisecond)
 	l.SetMADCTL(MADCTLRotate180)
+	lcdPIOSetup()
 }
 
 // SetMADCTL sets the memory access control (orientation) register.
@@ -110,14 +182,37 @@ func (l LCD) Push(y0 int16, pix []uint16) {
 }
 
 // PushRect sends a w×h block of RGB565 pixels to (x, y): partial updates
-// cost only the pixels of the rectangle.
+// cost only the pixels of the rectangle. The window commands are bit-banged;
+// the pixels go out through PIO0 fed by DMA, and PushRect returns once the
+// last byte is latched (the caller then draws into the same buffer).
 func (l LCD) PushRect(x, y, w, h int16, pix []uint16) {
+	n := int(w) * int(h)
 	l.window(int(x), int(y), int(x+w)-1, int(y+h)-1)
-	for _, p := range pix[:int(w)*int(h)] {
-		write(uint8(p >> 8))
-		write(uint8(p))
+	if n > 0 {
+		p := rp.PIO0
+		lcdPinsTo(funcPIO0)
+		ch := dmaCh(lcdDMA)
+		ch.read.Set(uint32(uintptr(unsafe.Pointer(&pix[0]))))
+		ch.write.Set(uint32(uintptr(unsafe.Pointer(&p.TXF0))))
+		ch.count.Set(uint32(n))
+		ch.ctrl.Set(rp.DMA_CH0_CTRL_TRIG_INCR_READ |
+			rp.DMA_CH0_CTRL_TRIG_DATA_SIZE_SIZE_HALFWORD<<rp.DMA_CH0_CTRL_TRIG_DATA_SIZE_Pos |
+			rp.DREQ_PIO0_TX0<<rp.DMA_CH0_CTRL_TRIG_TREQ_SEL_Pos |
+			lcdDMA<<rp.DMA_CH0_CTRL_TRIG_CHAIN_TO_Pos | // chained to itself: no chain
+			rp.DMA_CH0_CTRL_TRIG_EN)
+		for ch.ctrl.Get()&rp.DMA_CH0_CTRL_TRIG_BUSY != 0 {
+		}
+		// the FIFO drained, then a fresh stall: the last byte's WR rise is done
+		empty := uint32(1) << (rp.PIO0_FSTAT_TXEMPTY_Pos + lcdSM)
+		for p.FSTAT.Get()&empty == 0 {
+		}
+		stall := uint32(1) << (rp.PIO0_FDEBUG_TXSTALL_Pos + lcdSM)
+		p.FDEBUG.Set(stall)
+		for p.FDEBUG.Get()&stall == 0 {
+		}
 	}
-	machine.LCD_CS.High()
+	machine.LCD_CS.High() // before WR goes back to SIO (high): no stray latch
+	lcdPinsTo(funcSIO)
 }
 
 // PushIndexed sends a w×h block of 8-bit palette indices to (x, y), mapping
