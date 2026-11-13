@@ -103,6 +103,10 @@ type App struct {
 	pngIdx                 int
 	bitmapIdx              int
 	menu                   *menu
+	lightForce             int // light <raw>: forced sensor reading, -1: the real sensor
+	health                 health
+	txtStat                textBuf
+	allocU, allocD, allocP int // allocations in the last frame (ReportAllocs)
 	solid                  int // grey level of a uniform test screen, -1: off
 	overlay                *container.Overlay
 	picturesPage           *page
@@ -169,6 +173,7 @@ func New(d ui.Displayer, hw Hardware, cfg Config, now time.Time) *App {
 		speedMS:      1500,
 		cmds:         make(chan command, 16),
 		solid:        -1,
+		lightForce:   -1,
 	}
 	if _, usb := hw.Battery(); usb {
 		// on USB the badge is usually on the desk under the camera: full
@@ -236,6 +241,9 @@ func (a *App) Update(now time.Time) {
 	if now.Sub(a.lastSample) >= a.samplePeriod {
 		a.lastSample = now
 		a.lightRaw = a.hw.Light()
+		if a.lightForce >= 0 { // the light command: a reading forced for tests
+			a.lightRaw = uint16(a.lightForce)
+		}
 		a.light = a.lightFilt.add(a.lightRaw)
 		a.lightShown = steadyPct(a.lightShown, a.light)
 		a.vbat, a.usb = a.hw.Battery()
@@ -278,6 +286,7 @@ func (a *App) Update(now time.Time) {
 	a.frames++
 	if dt := now.Sub(a.fpsT); dt >= time.Second {
 		a.fps = int(int64(a.frames) * int64(time.Second) / int64(dt))
+		a.sampleHeap()
 		a.frames = 0
 		a.fpsT = now
 		a.infoLines[0] = "Navigator depth " + itoa(a.pages[a.cur].nav.Depth()) + ", tree nodes " + itoa(a.nodes)
@@ -311,6 +320,12 @@ func (a *App) Draw() {
 	}
 }
 
+// ReportAllocs records the heap allocations of the last frame's Update,
+// Draw (all bands) and push; `stats` prints them.
+func (a *App) ReportAllocs(update, draw, push int) {
+	a.allocU, a.allocD, a.allocP = update, draw, push
+}
+
 // ReportTiming records how long the board spent drawing and pushing a frame.
 func (a *App) ReportTiming(draw, push time.Duration) {
 	a.drawUS, a.pushUS = draw.Microseconds(), push.Microseconds()
@@ -338,6 +353,9 @@ func (a *App) footerText() string {
 	// heartbeat: seconds since boot (a frozen number means a stuck badge);
 	// the hints are short so it fits the 48-byte footer text
 	t.str("  ").int(a.fps).str("fps ").int(int(a.now.Sub(a.start) / time.Second)).str("s")
+	if h := &a.health; h.memShow {
+		t.str(" ").int(h.heapUsedKB).str("/").int(h.heapSysKB).str("K")
+	}
 	return t.String()
 }
 

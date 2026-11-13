@@ -106,21 +106,30 @@ func main() {
 		}
 		if now.Sub(last) >= frameTime {
 			last = now
+			m0 := mallocs()
 			a.Update(now)
+			m1 := mallocs()
 			if dumping = a.TakeDump(); dumping {
 				println("FB", app.ScreenW, app.ScreenH)
 			}
 			var draw, push time.Duration
+			var md, mp uint64
 			for i := range fb.Bands() {
 				fb.SetY0(int16(i * bandRows))
 				t0 := time.Now()
+				d0 := mallocs()
 				a.Draw()
+				d1 := mallocs()
 				t1 := time.Now()
 				_ = fb.Display()
+				md += d1 - d0
+				mp += mallocs() - d1
 				draw += t1.Sub(t0)
 				push += time.Since(t1)
 			}
 			a.ReportTiming(draw, push)
+			a.ReportFrame(time.Since(now))
+			a.ReportAllocs(int(m1-m0), int(md), int(mp))
 			if dumping {
 				println()
 				println("END")
@@ -145,6 +154,14 @@ func (i idleReader) Read(b []byte) (int, error) {
 		time.Sleep(5 * time.Millisecond)
 	}
 	return n, err
+}
+
+var memStats runtime.MemStats
+
+// mallocs is the runtime's allocation count (ReadMemStats doesn't allocate).
+func mallocs() uint64 {
+	runtime.ReadMemStats(&memStats)
+	return memStats.Mallocs
 }
 
 // dumpRows streams pixels over USB serial as big-endian RGB565. The frame

@@ -1,9 +1,6 @@
 package app
 
-import (
-	"runtime"
-	"time"
-)
+import "time"
 
 // Serial console. The board feeds ui.CommandStreamMux with these handlers;
 // handlers only enqueue, and Update executes them on the UI goroutine, so the
@@ -16,12 +13,19 @@ type command struct {
 	long   bool
 }
 
-const helpText = "commands: up|down|a|b|c [long], user <ms>, page <n>, led <0-100>, bl <10-100>, saver [0|1], solid [0-255], stats, tiles, dump, version, help"
+// helpLines lists the commands in lines that fit a log line (logLineLen):
+// one long line was cut off after `led`.
+var helpLines = [...]string{
+	"commands: up|down|a|b|c [long], user <ms>, page <n>",
+	"led <0-100>, bl <10-100>, saver [0|1], solid [0-255]",
+	"stats, tiles, frames, mem, memshow [0|1], light [raw|-1]",
+	"dump, version, help",
+}
 
 // Handlers returns the command table for ui.NewCommandStreamMux.
 func (a *App) Handlers() map[string]func([]byte) {
 	m := map[string]func([]byte){}
-	for _, name := range []string{"up", "down", "a", "b", "c", "user", "page", "led", "bl", "saver", "solid", "stats", "tiles", "dump", "version", "help"} {
+	for _, name := range []string{"up", "down", "a", "b", "c", "user", "page", "led", "bl", "saver", "solid", "stats", "tiles", "frames", "mem", "memshow", "light", "dump", "version", "help"} {
 		m[name] = func(arg []byte) { a.Command(name, string(arg)) }
 	}
 	return m
@@ -75,19 +79,35 @@ func (a *App) exec(c command) {
 	case "dump":
 		a.dumpReq = true
 	case "stats":
-		var ms runtime.MemStats
-		runtime.ReadMemStats(&ms)
 		a.log("build " + a.cfg.BuildID)
-		a.log("fps " + itoa(a.fps) + " draw_us " + itoa(int(a.drawUS)) + " push_us " + itoa(int(a.pushUS)) +
-			" page " + itoa(a.cur) + " edit " + itoa(btoi(a.editing)))
-		a.log("heap_alloc " + itoa(int(ms.HeapAlloc)) + " heap_sys " + itoa(int(ms.HeapSys)) +
-			" mallocs " + itoa(int(ms.Mallocs)) + " gc " + itoa(int(ms.NumGC)))
+		a.log(a.txtStat.reset().str("fps ").int(a.fps).str(" draw_us ").int(int(a.drawUS)).str(" push_us ").int(int(a.pushUS)).
+			str(" page ").int(a.cur).str(" edit ").int(btoi(a.editing)).String())
+		a.memReport() // live and free after a collection: heap_alloc counts uncollected garbage
+		a.log(a.txtStat.reset().str("frame allocs update ").int(a.allocU).str(" draw ").int(a.allocD).str(" push ").int(a.allocP).String())
 	case "tiles": // frame budget of each demo tile on the Demos page
 		a.menu.report(a.log)
+	case "light": // the phototransistor's last reading; light <raw> forces a reading (0: darkest), light -1 the real sensor again
+		if c.hasArg {
+			a.lightForce = clampi(c.arg, -1, 65535)
+			a.lightFilt = lightFilter{} // the forced (or real) reading applies at the next sample
+		}
+		a.log(a.txtStat.reset().str("light raw ").int(int(a.lightRaw)).str(" median ").int(int(a.lightFilt.med)).
+			str(" pct ").int(a.lightShown).str(" backlight ").int(a.backlight).String())
+	case "frames": // frame-time histogram and GCs since the last call
+		a.framesReport()
+	case "mem": // live heap after a collection
+		a.memReport()
+	case "memshow": // heap use in the footer
+		a.health.memShow = !a.health.memShow
+		if c.hasArg {
+			a.health.memShow = c.arg != 0
+		}
 	case "version": // the firmware's build ID (tools/build)
 		a.log("build " + a.cfg.BuildID)
 	case "help":
-		a.log(helpText)
+		for _, l := range helpLines {
+			a.log(l)
+		}
 	}
 }
 

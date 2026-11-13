@@ -56,6 +56,8 @@ Confirmed on the device: orientation (MADCTL `0xB0`; the badge cam itself mirror
 
 Controls: UP/DOWN move focus (or change the value while editing; held = auto-repeat with the large step), A selects / commits, B cancels / goes back, C next page (held: previous page), USER hold > 1 s screensaver.
 
+`tools/soak [rounds]` uses the badge like a person, buttons only: every Demos tile full screen and back, the speed dropdown, the options dialog, then C through every page with its usual interactions (edits, list scrolling, each demo's Full view), `mem` (live heap after GC) every round.
+
 Serial console and buttons share one command channel; the full command set, the matching buttons and the host tool are in [commands](commands.md). The badge reports USB serial number `df6750955f2a3536`.
 
 ## Build and run

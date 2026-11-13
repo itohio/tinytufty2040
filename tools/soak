@@ -1,0 +1,70 @@
+#!/usr/bin/env python3
+"""soak — use the showcase like a person, N rounds: buttons only (no `page`
+jumps). Each round starts on the Demos page, opens every tile full screen
+and back, opens the speed dropdown and the options dialog, then walks every
+page with C, doing that page's usual interactions (edits, list scrolling,
+each demo's Full view), and C wraps back to Demos. The badge's memory is
+read after every round (`mem`: live and free heap after a GC).
+
+A crash shows as a missing reply, a reboot banner or a "fatal error" line
+in badgectl-out/console.log. Run it only inside the camera loop with
+verify (owner): no unattended soaks, no periodic watch.
+
+    tools/soak [rounds] [--every K]   # mem every K rounds (default 1)
+"""
+import os, re, subprocess, sys
+
+args = [a for a in sys.argv[1:] if not a.startswith("--")]
+rounds = int(args[0]) if args else 10
+every = 1
+if "--every" in sys.argv:
+    every = int(sys.argv[sys.argv.index("--every") + 1])
+    args = args[1:] if len(args) > 1 else args
+here = os.path.dirname(os.path.abspath(__file__))
+
+top = lambda n: ["up"] * n
+demos = top(6)
+for _ in range(5):  # Life, Water, Fire, Pong, Boids tiles: full screen and back
+    demos += ["a", "sleep:0.8", "b", "down"]
+demos += ["a", "b",                       # the speed dropdown: open, close
+          "b", "down", "down", "down", "a"]  # B: the options dialog, Close
+pages = [
+    ("Demos", demos),
+    ("Dash", ["down", "down", "up", "up"]),
+    ("Gauge", top(3) + ["a", "up", "a"]),                       # edit the level
+    ("Ctrl", top(6) + ["down", "a", "up", "a"]),                # edit LED level (never the backlight: the glass must stay lit)
+    ("Image", top(3) + ["a", "up", "a", "down", "a", "up", "a"]),
+    ("Flow", ["down", "down"]),
+    ("List", top(3) + ["a", "down", "down", "down", "down", "b"]),
+    ("Log", ["up", "up"]),
+    ("Life", top(4) + ["down", "down", "a", "sleep:0.8", "b"]),     # Full
+    ("Water", top(6) + ["down"] * 3 + ["a", "sleep:0.8", "b"]),     # Full
+    ("Fire", top(6) + ["down"] * 3 + ["a", "sleep:0.8", "b"]),      # Full
+    ("Pong", top(3) + ["down", "a", "sleep:0.8", "b"]),             # You: a game
+    ("Boids", top(5) + ["down"] * 3 + ["a", "sleep:0.8", "b"]),     # Full
+]
+
+cmds = ["frames", "mem"]
+for r in range(rounds):
+    for _, steps in pages:
+        cmds += steps + ["c", "sleep:0.3"]
+    if (r + 1) % every == 0 or r == rounds - 1:
+        cmds += ["mem"]
+cmds += ["frames", "mem", "stats"]
+run = subprocess.run([os.path.join(here, "badgectl"), "--no-cam", *cmds], capture_output=True, text=True)
+if run.returncode != 0:
+    print(f"badgectl failed ({run.returncode}):", run.stderr.strip()[-600:])
+lines = run.stdout.splitlines()
+keep = [l for l in lines if l.startswith(("mem ", "frames ", "ms ", "fps ", "frame allocs", "fatal", "panic"))]
+print("\n".join(keep))
+visits = [l[5:] for l in lines if l.startswith("page ")]
+want = [n for _ in range(rounds) for n, _ in pages[1:] + pages[:1]]
+names = {n for n, _ in pages}
+visits = [v for v in visits if v in names]
+print(f"soak: {rounds} rounds, {len(visits)} of {len(want)} page changes by C answered, "
+      f"in order: {visits == want[:len(visits)]}")
+live = [int(m.group(1)) for m in (re.match(r"mem live_kb (\d+)", l) for l in lines) if m]
+if live:
+    print(f"live heap after GC: first {live[0]} KB, last {live[-1]} KB, max {max(live)} KB")
+if visits != want[:len(visits)]:
+    print("visited:", " ".join(visits))

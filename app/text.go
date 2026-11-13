@@ -6,7 +6,7 @@ import "unsafe"
 // string without allocating. The string aliases the buffer: use it before the
 // next reset (labels read it during Draw, which is exactly that).
 type textBuf struct {
-	b [48]byte
+	b [64]byte
 	n int
 }
 

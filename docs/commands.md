@@ -35,10 +35,14 @@ Same meaning on every page (owner 2026-11-12: "up and down … A, B, and C … s
 | `led <0-100>` | user LED brightness (0 = off) | — (Ctrl page: User LED, LED level) | |
 | `bl <10-100>` | backlight brightness; **100 is DC** (pin driven high, no PWM: no stripes in camera photos), below 100 a 200 kHz PWM; the default is 100 on USB power, 80 on battery | — (Ctrl page: Backlight) | |
 | `saver` / `saver 1` / `saver 0` | toggle / switch on / switch off the screensaver (`RandomContext` burn-in shift) | USER hold > 1 s toggles | any button press leaves it |
-| `stats` | log `build <ID>`; `fps`, `draw_us`, `push_us`, page, edit state; `heap_alloc`, `heap_sys`, `mallocs`, `gc` | — | |
+| `stats` | log the build ID; `fps`, `draw_us`, `push_us`, page, edit state; the `mem` lines; frame allocations (update/draw/push) | — | |
+| `mem` | collect garbage, then `mem live_kb <n> free_kb <n> heap_kb <n> gc <n>`: free after the collection is the headroom (between collections `heap_alloc` also counts garbage); then `mallocs <n> frees <n>` since boot: growth between two `mem` lines while idle means something outside the frame allocates | — | |
+| `frames` | the frame-time histogram since the last call: `frames <n> max_ms <ms> gc <n>`, then `ms` lines of buckets (0-40, 40-60, 60-80, 80-120, 120-200, 200-500, 500+ ms: frames in each) | — | |
+| `memshow` / `memshow 1` / `memshow 0` | toggle / show / hide the heap use (`used/sys K`, refreshed once a second, counts garbage) in the footer | — | |
 | `version` | log `build <ID>`: the firmware's build ID, `<tinytufty2040 commit>[+]/<tinygui commit>[+]@<MMDD-HHMM>` (`+`: uncommitted changes), set by `tools/build` | — | |
 | `solid [0-255]` | the whole screen one grey level (255 white) for camera tests; no argument returns to the UI | — | |
 | `tiles` | frame budget of each Demos tile: `tile <name> tick_us <µs> draw_us <µs>` (draw summed over the three bands) | — | |
+| `light` / `light <raw>` / `light -1` | log the light sensor (`light raw <last reading> median <of the last 5> pct <level> backlight <n>`; the level is on a log scale, 64 → 0 %, 16384 → 100 %, filtered: median of 5, then an average, the readout moving by whole steps — `app/light.go`); with a number, force that reading (0: the darkest room); `-1`: the real sensor again | — | |
 | `dump` | send the framebuffer: line `FB 320 240`, 153 600 bytes big-endian RGB565 (both bands), line `END` | — | what was drawn, not what the glass shows |
 | `help` | list the commands | — | |
 | `madctl <n>` | write the panel's MADCTL register (orientation probe; default 176 = `0xB0`) | — | firmware only (`main_tufty2040.go`) |

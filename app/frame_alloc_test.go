@@ -18,6 +18,7 @@ func (testHW) SetBacklight(int)         {}
 // allocating: per-frame garbage fills the badge's 142 KB heap and the
 // collections that follow cost frames (findings F-34).
 func TestPagesDrawFramesWithoutAllocating(t *testing.T) {
+	needMallocCount(t)
 	fb := framebuffer.New(ScreenW, 80, make([]uint16, ScreenW*80), nil)
 	id := func(d, x time.Duration) time.Duration { return d }
 	now := time.Now()
