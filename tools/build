@@ -16,7 +16,9 @@ out = sys.argv[1] if len(sys.argv) > 1 else os.path.join(repo, "..", "_scratch",
 
 def rev(path):
     h = subprocess.run(["git", "-C", path, "rev-parse", "--short=7", "HEAD"], capture_output=True, text=True).stdout.strip()
-    dirty = subprocess.run(["git", "-C", path, "status", "--porcelain", "--untracked-files=no"],
+    # untracked files count (review R-TG-postcommit G2: a new, un-added .go file
+    # was compiled in while the ID looked clean); .gitignore'd files don't
+    dirty = subprocess.run(["git", "-C", path, "status", "--porcelain", "--untracked-files=normal"],
                            capture_output=True, text=True).stdout.strip()
     return h + ("+" if dirty else "")
 
