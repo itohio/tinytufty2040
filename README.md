@@ -7,10 +7,11 @@ What TinyGo can do on a Pimoroni Tufty 2040 badge (RP2040, 133 MHz rated / 200 M
 | Life | Game of Life with ageing cells; glider gun, Acorn, R-pentomino |
 | Water | a liquid that levels and follows gravity in 8 directions, pours, fills |
 | Fire | a burning liquid: fuel pools and sloshes with gravity and seeds flames that rise against it |
-| Pong | CPU vs CPU in its tile, you vs CPU full screen |
-| Boids | a flock in a world frame; the screen is a box you turn and shake through it |
+| Pong | CPU vs CPU in its tile, you vs CPU full screen; paddles and ball at pixel positions |
+| Boids | a flock in a world frame; the screen is a box the badge's roll (or the buttons) turns and shakes through it |
+| Motion | with an IMU: the badge in 3D from a Mahony filter, a trail of where its top points, roll/pitch/yaw, gyro bias |
 
-Gravity and the boids' box follow the buttons: the Tufty has no motion sensor (see [docs/overview.md](docs/overview.md#motion-sensor)). An IMU on the Qw/ST port, read through an [EasyRobot](https://github.com/itohio/EasyRobot) driver, is next.
+An MPU6050 on the debug pads (I2C0, GPIO4/5, INT GPIO3) feeds one shared motion state (EasyRobot's Mahony filter, `x/math/filter/ahrs`, and strapdown, `x/math/nav/strapdown`, with the gyro bias learnt at rest): the boids' box turns and moves with the badge, Pong's paddle follows it up and down, the Motion page shows its path; without one, the buttons do (see [docs/overview.md](docs/overview.md#motion-sensor)).
 
 ## Layout
 
@@ -25,7 +26,7 @@ Gravity and the boids' box follow the buttons: the Tufty has no motion sensor (s
 
 ## Build
 
-Needs Go 1.23+, TinyGo 0.43, and a tinygui checkout next to this repo (`go.mod` replaces `github.com/itohio/tinygui` with `../tinygui`).
+Needs Go 1.25+, TinyGo 0.43, a tinygui checkout next to this repo (`go.mod` replaces `github.com/itohio/tinygui` with `../tinygui`), and an EasyRobot checkout next to it too (`go.mod` replaces `github.com/itohio/EasyRobot` with `../EasyRobot`: the MPU6050 driver, Mahony filter and strapdown).
 
 ```sh
 go test ./...

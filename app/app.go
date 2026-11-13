@@ -32,6 +32,9 @@ type Config struct {
 	DurationAdd, DurationSub func(d, delta time.Duration) time.Duration
 	// Log mirrors log lines, e.g. to the USB serial console. May be nil.
 	Log func(line string)
+	// IMU: a motion sensor feeds SetIMU; adds the Motion page (owner: the
+	// Mahony page only when there is an IMU).
+	IMU bool
 	// BuildID names the firmware (git commits, dirty flag, build time):
 	// `version` and `stats` report it (tools/build sets it).
 	BuildID string
@@ -110,20 +113,26 @@ type App struct {
 	optLabels              []string // the Demos options dialog's labels (first: Pause/Resume all)
 	optDialog, resetDialog *widget.Dialog
 	aboutDialog            *widget.Dialog
+	motion                 *motion // IMU fusion; nil without an IMU
 	// demo models: they outlive their pages (the Demos page's tiles run them)
-	life  *life
-	water *water
-	fire  *fire
-	pong  *pong
-	boids *boids
+	life                   *life
+	water                  *water
+	fire                   *fire
+	pong                   *pong
+	boids                  *boids
+	motionDemo             *motionDemo
+	tilters                []tilter
 	lightForce             int // light <raw>: forced sensor reading, -1: the real sensor
 	health                 health
 	txtStat                textBuf
-	allocU, allocD, allocP int // allocations in the last frame (ReportAllocs)
-	solid                  int // grey level of a uniform test screen, -1: off
+	allocU, allocD, allocP int     // allocations in the last frame (ReportAllocs)
+	tiltDir                int     // gravity from the motion sensor (SetTilt)
+	tiltX, tiltY           float32 // the last in-plane gravity (screen x right, y down; m/s²), the tilt command
+	tilted                 bool    // SetTilt has given a direction
+	solid                  int     // grey level of a uniform test screen, -1: off
 	overlay                *container.Overlay
-	imagePage              int // index of the Image page (the plasma animates only there)
-	full                   *widget.CellGrid // a demo drawn full screen instead of the UI
+	imagePage              int       // index of the Image page (the plasma animates only there)
+	full                   ui.Widget // a demo drawn full screen instead of the UI
 	fullCtx                ui.ContextImpl
 	speedMS                int
 
@@ -178,12 +187,18 @@ const (
 
 // initDemos makes the demo models and the Demos page's tiles that run them:
 // they live as long as the App, their pages are built around them on demand.
-func (a *App) initDemos() {
+func (a *App) initDemos(cfg Config) {
+	imu := cfg.IMU
 	a.life, a.water, a.fire, a.pong, a.boids = newLife(), newWater(), newFire(), newPong(), newBoids()
 	a.life.log2, a.water.log2, a.fire.log2 = a.log2, a.log2, a.log2
 	a.pong.log, a.boids.log = a.log, a.log
 	a.menu = a.newMenu([]string{"Life", "Water", "Fire", "Pong", "Boids"},
 		[]previewer{a.life, a.water, a.fire, a.pong, a.boids})
+	if imu {
+		a.motion = newMotion()
+		a.motionDemo = newMotionDemo(a.motion)
+		a.pong.motion = a.motion // your paddle follows the badge up and down
+	}
 }
 
 // New builds the whole UI. d must stay valid for the app's lifetime.
@@ -209,7 +224,7 @@ func New(d ui.Displayer, hw Hardware, cfg Config, now time.Time) *App {
 	}
 	a.restartCurves()
 	a.initLive()
-	a.initDemos()
+	a.initDemos(cfg)
 	// The pages: all built at the end of setup (BuildAll below).
 	type pageDef struct {
 		name  string
@@ -222,6 +237,9 @@ func New(d ui.Displayer, hw Hardware, cfg Config, now time.Time) *App {
 		{"Image", a.pagePictures, nil}, {"Flow", a.pageLayouts, nil}, {"List", a.pageList, nil}, {"Log", a.pageLog, nil},
 		{"Life", a.pageLife, a.life}, {"Water", a.pageWater, a.water}, {"Fire", a.pageFire, a.fire},
 		{"Pong", a.pagePong, a.pong}, {"Boids", a.pageBoids, a.boids},
+	}
+	if cfg.IMU {
+		defs = append(defs, pageDef{"Motion", a.pageMotion, a.motionDemo})
 	}
 	names := make([]string, len(defs))
 	specs := make([]container.PageSpec, len(defs))
@@ -311,7 +329,7 @@ func (a *App) Update(now time.Time) {
 	a.full = nil
 	if d := a.demoOf[a.cur]; d != nil {
 		d.tick()
-		a.full = d.fullGrid()
+		a.full = d.fullView()
 	}
 	if a.full != nil {
 		w, h := a.full.Size()

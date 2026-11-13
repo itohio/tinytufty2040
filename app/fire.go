@@ -4,6 +4,7 @@ import (
 	"image/color"
 	"time"
 
+	ui "github.com/itohio/tinygui"
 	"github.com/itohio/tinygui/layout"
 	"github.com/itohio/tinygui/widget"
 )
@@ -61,6 +62,7 @@ type fire struct {
 	height     int
 	stepUS     int64
 	grid, full *widget.CellGrid
+	tiles      [2]*widget.CellGrid // the Demos tile: 1 px, 2 px focused
 	fullOn     bool
 	txt, txt2  textBuf
 	log2       func(p1, p2 string) // App.log2: two parts, no string built
@@ -70,6 +72,8 @@ func newFire() *fire {
 	f := &fire{liquid: newLiquid(fireW, fireH), height: 1}
 	f.grid = widget.NewCellGrid(fireW, fireH, firePitch, 1, widget.CellRound, f.cells[:], firePalette, colBG)
 	f.full = widget.NewCellGrid(fireW, fireH, 5, 1, widget.CellRound, f.cells[:], firePalette, colBG)
+	f.tiles[0] = widget.NewCellGrid(fireW, fireH, 1, 0, widget.CellSquare, f.cells[:], firePalette, colBG)
+	f.tiles[1] = widget.NewCellGrid(fireW, fireH, 2, 0, widget.CellSquare, f.cells[:], firePalette, colBG)
 	f.reset()
 	return f
 }
@@ -182,7 +186,7 @@ func (f *fire) step() {
 
 func (f *fire) tick() { f.step() }
 
-func (f *fire) fullGrid() *widget.CellGrid {
+func (f *fire) fullView() ui.Widget {
 	if f.fullOn {
 		return f.full
 	}
@@ -210,9 +214,8 @@ func (f *fire) fullPress(b Button) bool {
 	return true
 }
 
-func (f *fire) preview() []uint8      { return f.cells[:] }
-func (f *fire) palette() []color.RGBA { return firePalette }
-func (f *fire) showFull()             { f.fullOn = true }
+func (f *fire) tileViews() (ui.Widget, ui.Widget) { return f.tiles[0], f.tiles[1] }
+func (f *fire) showFull()                         { f.fullOn = true }
 
 func (a *App) pageFire() *page {
 	f := a.fire

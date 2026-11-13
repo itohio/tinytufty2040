@@ -1,6 +1,7 @@
 package app
 
 import (
+	ui "github.com/itohio/tinygui"
 	"image/color"
 	"time"
 
@@ -10,7 +11,8 @@ import (
 
 // Pong on a 64×48 LED matrix. Positions are fixed point, 1/256 of a cell
 // (no FPU on the M0+). In the page both paddles are CPU players; full
-// screen the left paddle is yours (UP/DOWN).
+// screen the left paddle is yours: it follows the badge as you move it up
+// and down (with an IMU), and UP/DOWN.
 const (
 	pongW, pongH = 64, 48
 	pongFix      = 256
@@ -22,6 +24,14 @@ const (
 	pongServeVX  = 128
 	pongMaxVX    = 320
 	pongPitch    = 3
+	// your paddle follows the badge's displacement along its own up axis
+	// (motion.disp[1]; owner 2026-11-13: "vertical position in the badge
+	// frame of reference, not real world frame of reference") 1:1 on
+	// the glass (owner 2026-11-13: "move the board up or down and the paddle
+	// move up or down with the same speed and motion"): full screen a cell is
+	// 5 px, 0.6375 mm on the 2.0" panel (320 px across 40.8 mm), so the
+	// paddle's whole travel (40 cells) is 2.55 cm of badge motion
+	pongCellsPerM = 1000 / 0.6375
 )
 
 var pongLevels = []string{"easy", "normal", "hard"}
@@ -53,17 +63,20 @@ var pongDigits = [10][5]uint8{
 }
 
 type pong struct {
-	cells          [pongW * pongH]uint8
 	bx, by, vx, vy int32
 	pad            [2]int32 // paddle tops (left, right)
 	target         int32    // player's paddle target (top)
 	score          [2]int
-	trail          [3][2]int32 // previous ball cells, newest first
+	ballHist       [3][2]int32 // previous exact ball positions (one per frame), newest first
 	level          int
-	player         bool // left paddle follows target instead of the CPU
+	player         bool    // left paddle follows target instead of the CPU
+	motion         *motion // nil without an IMU
+	anchorY        float32 // the badge's displacement along its up axis (m) where the paddle was at anchorPad
+	anchorPad      int32
 	paused         bool
 	stepUS         int64
-	grid, full     *widget.CellGrid
+	grid, full     *pongView
+	tiles          [2]*pongView
 	fullOn         bool
 	txt            textBuf
 	log            func(string)
@@ -75,9 +88,9 @@ func newPong() *pong {
 	p.pad[1] = p.pad[0]
 	p.target = p.pad[0]
 	p.serve(1)
-	p.grid = widget.NewCellGrid(pongW, pongH, pongPitch, 1, widget.CellRound, p.cells[:], pongPalette, colBG)
-	p.full = widget.NewCellGrid(pongW, pongH, 5, 1, widget.CellRound, p.cells[:], pongPalette, colBG)
-	p.render()
+	p.grid = newPongView(p, pongW*pongPitch, pongH*pongPitch)
+	p.full = newPongView(p, ScreenW, ScreenH)
+	p.tiles = [2]*pongView{newPongView(p, tileW, tileH), newPongView(p, 2*tileW, 2*tileH)}
 	return p
 }
 
@@ -89,8 +102,8 @@ func (p *pong) serve(dir int32) {
 	if rand32()&1 == 0 {
 		p.vy = -p.vy
 	}
-	for i := range p.trail {
-		p.trail[i] = [2]int32{p.bx >> 8, p.by >> 8}
+	for i := range p.ballHist {
+		p.ballHist[i] = [2]int32{p.bx, p.by}
 	}
 }
 
@@ -158,61 +171,48 @@ func (p *pong) point(side int) {
 	p.serve(int32(1 - 2*side)) // towards the side that missed
 }
 
-// render draws the court into the cells.
-func (p *pong) render() {
-	clear(p.cells[:])
-	for y := 0; y < pongH; y += 2 {
-		p.cells[y*pongW+pongW/2] = pongNet
-	}
-	p.digit(pongW/2-6, 1, p.score[0])
-	p.digit(pongW/2+4, 1, p.score[1])
-	for side, x := range [2]int{pongLeftX, pongRightX} {
-		top := int(p.pad[side] >> 8)
-		for y := top; y < top+pongPadLen; y++ {
-			p.cells[y*pongW+x] = pongPaddle
-		}
-	}
-	for i := len(p.trail) - 1; i >= 0; i-- {
-		t := p.trail[i]
-		p.set(int(t[0]), int(t[1]), pongTrail3-uint8(i))
-	}
-	p.set(int(p.bx>>8), int(p.by>>8), pongBall)
-}
-
-func (p *pong) set(x, y int, v uint8) {
-	if x >= 0 && y >= 0 && x < pongW && y < pongH {
-		p.cells[y*pongW+x] = v
-	}
-}
-
-func (p *pong) digit(x, y, d int) {
-	for r, bits := range pongDigits[d] {
-		for c := range 3 {
-			if bits&(4>>c) != 0 {
-				p.cells[(y+r)*pongW+x+c] = pongScore
-			}
-		}
-	}
-}
-
 func (p *pong) tick() {
+	p.follow() // paused too: your paddle stays with the badge
 	if p.paused {
 		return
 	}
 	t0 := time.Now()
+	copy(p.ballHist[1:], p.ballHist[:len(p.ballHist)-1])
+	p.ballHist[0] = [2]int32{p.bx, p.by}
 	for range pongTicks {
-		cell := [2]int32{p.bx >> 8, p.by >> 8}
 		p.step()
-		if cell != p.trail[0] {
-			copy(p.trail[1:], p.trail[:len(p.trail)-1])
-			p.trail[0] = cell
-		}
 	}
-	p.render()
 	p.stepUS = time.Since(t0).Microseconds()
 }
 
-func (p *pong) fullGrid() *widget.CellGrid {
+// follow moves your paddle with the badge's displacement along its own up
+// axis since the anchor, at
+// once (same speed as the badge). At the top or bottom it stops and the
+// anchor moves with the badge, so turning back moves the paddle at once
+// (like a mouse at the screen's edge).
+func (p *pong) follow() {
+	m := p.motion
+	if !p.player || m == nil {
+		return
+	}
+	y := m.disp[1]
+	pad := p.anchorPad - int32((y-p.anchorY)*pongCellsPerM*pongFix) // up the screen is -y
+	if lim := int32((pongH - pongPadLen) * pongFix); pad < 0 || pad > lim {
+		pad = min(max(pad, 0), lim)
+		p.anchor(pad)
+	}
+	p.target, p.pad[0] = pad, pad
+}
+
+// anchor ties the paddle position pad to the badge's displacement now.
+func (p *pong) anchor(pad int32) {
+	p.anchorPad = pad
+	if p.motion != nil {
+		p.anchorY = p.motion.disp[1]
+	}
+}
+
+func (p *pong) fullView() ui.Widget {
 	if p.fullOn {
 		return p.full
 	}
@@ -225,8 +225,12 @@ func (p *pong) fullPress(b Button) bool {
 	switch b {
 	case BtnUp:
 		p.target = max(p.target-6*pongFix, 0)
+		p.anchor(p.target) // the badge carries on from here
+		p.movePaused()
 	case BtnDown:
 		p.target = min(p.target+6*pongFix, (pongH-pongPadLen)*pongFix)
+		p.anchor(p.target)
+		p.movePaused()
 	case BtnA:
 		p.paused = !p.paused
 	case BtnB:
@@ -236,6 +240,15 @@ func (p *pong) fullPress(b Button) bool {
 		return false
 	}
 	return true
+}
+
+// movePaused puts your paddle at its target at once while the game is
+// paused: no physics step runs to glide it there, and it would jump on
+// resume (verify2 TG-pong-paddle).
+func (p *pong) movePaused() {
+	if p.paused {
+		p.pad[0] = p.target
+	}
 }
 
 func (p *pong) leave() {
@@ -253,7 +266,7 @@ func (a *App) pagePong() *page {
 		still(p.grid),
 		newField("CPU", 42, 104, level),
 		newField("You", 42, 104, play),
-		a.caption(104, "UP/DOWN: paddle"),
+		a.caption(104, pongHint(p.motion != nil)),
 		a.caption(104, "A pause, B back"),
 		still(a.text(104, func() string { return p.txt.reset().str("step ").int(int(p.stepUS)).str(" us").String() }, colMuted)),
 	)
@@ -261,13 +274,21 @@ func (a *App) pagePong() *page {
 	return pg
 }
 
-func (p *pong) preview() []uint8      { return p.cells[:] }
-func (p *pong) palette() []color.RGBA { return pongPalette }
+// pongHint is the page's line on how to move your paddle.
+func pongHint(imu bool) string {
+	if imu {
+		return "move badge, UP/DN"
+	}
+	return "UP/DOWN: paddle"
+}
+
+func (p *pong) tileViews() (ui.Widget, ui.Widget) { return p.tiles[0], p.tiles[1] }
 
 // showFull starts a game against the CPU on the whole screen.
 func (p *pong) showFull() {
 	p.fullOn, p.player, p.score = true, true, [2]int{}
 	p.target = p.pad[0]
+	p.anchor(p.pad[0])
 }
 
 func (p *pong) reset() { p.score = [2]int{}; p.serve(1) }

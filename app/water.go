@@ -4,6 +4,7 @@ import (
 	"image/color"
 	"time"
 
+	ui "github.com/itohio/tinygui"
 	"github.com/itohio/tinygui/layout"
 	"github.com/itohio/tinygui/widget"
 )
@@ -38,6 +39,7 @@ type water struct {
 	// full-screen LED views of the same grid: 64×48 at 5 px (320×240) or
 	// 64×60 at 4 px (256×240); rows are a window chosen by gravity
 	full    [2]*widget.CellGrid
+	tiles   [2]*widget.CellGrid // the Demos tile: 64×48 at 1 px, 2 px focused (pointTiles)
 	fullOn  bool
 	fullIdx int
 	txt     textBuf
@@ -50,6 +52,8 @@ func newWater() *water {
 	w.grid = widget.NewCellGrid(waterN, waterN, waterPitch, 1, widget.CellRound, w.shade[:], waterPalette, colBG)
 	w.full[0] = widget.NewCellGrid(waterN, 48, 5, 1, widget.CellRound, w.shade[:waterN*48], waterPalette, colBG)
 	w.full[1] = widget.NewCellGrid(waterN, 60, 4, 1, widget.CellRound, w.shade[:waterN*60], waterPalette, colBG)
+	w.tiles[0] = widget.NewCellGrid(waterN, tileH, 1, 0, widget.CellSquare, w.window(tileH), waterPalette, colBG)
+	w.tiles[1] = widget.NewCellGrid(waterN, tileH, 2, 0, widget.CellSquare, w.window(tileH), waterPalette, colBG)
 	w.fill()
 	return w
 }
@@ -59,6 +63,7 @@ func (w *water) step() {
 	t0 := time.Now()
 	w.liquid.step()
 	w.shadeCells()
+	w.pointTiles()
 	w.stepUS = time.Since(t0).Microseconds()
 }
 
@@ -71,13 +76,14 @@ func (w *water) fill() {
 		}
 	}
 	w.shadeCells()
+	w.pointTiles()
 }
 
 var waterFullNames = []string{"5 px", "4 px"}
 
-// fullGrid returns the full-screen grid with its rows pointed at the window
+// fullView returns the full-screen grid with its rows pointed at the window
 // where the water collects. Call from Update, not Draw.
-func (w *water) fullGrid() *widget.CellGrid {
+func (w *water) fullView() ui.Widget {
 	if !w.fullOn {
 		return nil
 	}
@@ -99,9 +105,15 @@ func (w *water) window(rows int) []uint8 {
 	return w.shade[off*waterN : (off+rows)*waterN]
 }
 
-func (w *water) preview() []uint8      { return w.window(tileRows) }
-func (w *water) palette() []color.RGBA { return waterPalette }
-func (w *water) showFull()             { w.fullOn = true }
+// pointTiles points the Demos tile's rows at the window where the water
+// collects, as fullView does for the full-screen grid.
+func (w *water) pointTiles() {
+	c := w.window(tileH)
+	w.tiles[0].Cells, w.tiles[1].Cells = c, c
+}
+
+func (w *water) tileViews() (ui.Widget, ui.Widget) { return w.tiles[0], w.tiles[1] }
+func (w *water) showFull()                         { w.fullOn = true }
 
 // waterDepthShade maps depth below the surface (along gravity) to a palette
 // index: 0 is the surface (foam), deeper is darker. A table, not a division.

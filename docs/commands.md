@@ -20,6 +20,7 @@ Same meaning on every page (owner 2026-11-12: "up and down … A, B, and C … s
 - **USB serial** (USB CDC, any baud rate): one command per line, `\n`-terminated. The badge reports USB serial number `df6750955f2a3536` (its flash unique ID, the same number MicroPython reported); find it by that, not by port name.
 - **Host tool**: `tools/badgectl`: `badgectl a up up a` sends commands and prints the replies; `--grab` adds a badge-cam photo after each; `--tour` reboots the badge and replays the simulator tour, saving framebuffer dumps, badge-cam photos and simulator PNGs side by side; `--monitor` prints the console (for testing the buttons by hand).
 - Serial handlers only queue the command (16 deep, extra lines dropped); `App.Update` executes it at the start of the next frame on the UI goroutine ([tinygui concurrency](https://github.com/itohio/tinygui/blob/main/docs/architecture/concurrency.md)).
+- **One serial writer** (`console`, review R-TG-1 T4/T5): every byte the badge sends — log lines, replies, dumps — goes through a 2 KB ring that one goroutine drains into USB (2 KB, not 4: the heap is the RAM `.bss` leaves). A host that keeps the port open without reading stalls only that goroutine, never the frame loop: a line that doesn't fit is dropped and counted (`console: lines dropped (queue full) <n>` once there is room). A dump (`FB …`) holds the ring from its header to `END`, so no other line lands inside it; lines written meanwhile are dropped and counted.
 
 ## Commands
 
@@ -41,13 +42,15 @@ Same meaning on every page (owner 2026-11-12: "up and down … A, B, and C … s
 | `memshow` / `memshow 1` / `memshow 0` | toggle / show / hide the heap use (`used/sys K`, refreshed once a second, counts garbage) in the footer | — | |
 | `version` | log `build <ID>`: the firmware's build ID, `<tinytufty2040 commit>[+]/<tinygui commit>[+]@<MMDD-HHMM>` (`+`: uncommitted changes), set by `tools/build` | — | |
 | `solid [0-255]` | the whole screen one grey level (255 white) for camera tests; no argument returns to the UI | — | |
+| `motion` | the shared motion state as the demos read it, two lines: `motion P <x> <y> <z> um disp <x> <y> <z> um` (the strapdown's world position and the badge-frame displacement, in µm; the Motion page shows whole cm, the paddle moves 0.13 mm a pixel) and `rest <n>% of <samples> settled <0/1> pad <px> win <dx> <dy> false <n> moves <n>` (since the last `motion`: how much of the time the strapdown called rest; Pong's paddle row in px; the boids' window offset in tenths of a cell; the strapdown's false starts dropped by the paddle and window's gate (shorter than 1.5 mm or 0.45 s) and the moves counted) | — | measuring the paddle and the boids' window at rest |
 | `tiles` | frame budget of each Demos tile: `tile <name> tick_us <µs> draw_us <µs>` (draw summed over the three bands) | — | |
 | `light` / `light <raw>` / `light -1` | log the light sensor (`light raw <last reading> median <of the last 5> pct <level> backlight <n>`; the level is on a log scale, 64 → 0 %, 16384 → 100 %, filtered: median of 5, then an average, the readout moving by whole steps — `app/light.go`); with a number, force that reading (0: the darkest room); `-1`: the real sensor again | — | |
-| `dump` | send the framebuffer: line `FB 320 240`, 153 600 bytes big-endian RGB565 (both bands), line `END` | — | what was drawn, not what the glass shows |
+| `tilt` | the in-plane gravity the demos use (after the IMU axis map): `gravity <d.d> deg toward screen left\|right, in-plane <m/s²>` — the angle from screen-down, the badge's lower side, and the in-plane size (small = lying nearly flat, the angle means little); `gravity: no direction` when flat or without a motion sensor | — | |
+| `dump` | send the framebuffer: line `FB 320 240`, 153 600 bytes big-endian RGB565 (all three bands), line `END` | — | what was drawn, not what the glass shows |
 | `help` | list the commands | — | |
 | `madctl <n>` | write the panel's MADCTL register (orientation probe; default 176 = `0xB0`) | — | firmware only (`main_tufty2040.go`) |
 | `pins` | print raw button levels and VBUS | — | firmware only |
-| `imu` | probe Qw/ST for a known motion sensor (WHO_AM_I) and print what answers; also done at boot | — | firmware only |
+| `imu` | the motion sensor in use (MPU6050 at 0x68 drives gravity and the Motion page), or a probe for a known one (WHO_AM_I) and what answers | — | firmware only |
 | `reboot` | restart the firmware (`arm.SystemReset`); scripted tours start from it | — | firmware only; the badge re-enumerates with the same serial number |
 
 Every press also counts in the Dash page's bar chart, so serial and physical presses are both visible on screen.

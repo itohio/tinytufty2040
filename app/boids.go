@@ -1,17 +1,18 @@
 package app
 
 import (
+	ui "github.com/itohio/tinygui"
 	"image/color"
+	"math"
 	"time"
 
 	"github.com/itohio/tinygui/layout"
 	"github.com/itohio/tinygui/widget"
 )
 
-// Boids (Reynolds: separation, alignment, cohesion) on a 64×48 LED matrix.
-// Positions and velocities are fixed point, 1/256 of a cell. Each boid lights
-// its cell in a colour for its heading; the cells it leaves fade out, so the
-// flock draws trails. Neighbours are found by a plain scan with an early
+// Boids (Reynolds: separation, alignment, cohesion) in a 64×48-cell box,
+// drawn in real pixels by boidsView. Positions and velocities are fixed
+// point, 1/256 of a cell. Neighbours are found by a plain scan with an early
 // reject on |dx| and |dy|: at most 128 boids, so a spatial grid isn't needed
 // (the step time is shown on the page).
 const (
@@ -24,6 +25,7 @@ const (
 	boidsVMax      = 128
 	boidsVMin      = 56
 	boidsTrail     = 3 // trail palette indices 1..3, heads from 4
+	boidsHist      = 4 // positions kept per boid for the full-resolution trail
 )
 
 var (
@@ -42,11 +44,15 @@ var boidsPalette = []color.RGBA{
 type boids struct {
 	x, y, vx, vy [boidsMax]int32
 	nvx, nvy     [boidsMax]int32
-	cells        [boidsW * boidsH]uint8
+	hist         [boidsMax][boidsHist][2]int16 // recent positions (ring), from the box centre then (histC): int16 halves the 4 KB, wherever the box goes
+	histC        [boidsHist][2]int32           // the box centre when each history slot was taken
+	feltX, feltY float32                       // the apparent acceleration the flock feels (screen axes, m/s²; feel)
+	histI        int
 	count        int // index into boidsN
 	pose         boxPose
 	stepUS       int64
-	grid, full   *widget.CellGrid
+	grid, full   *boidsView
+	tiles        [2]*boidsView
 	fullOn       bool
 	txt          textBuf
 	log          func(string)
@@ -55,8 +61,9 @@ type boids struct {
 func newBoids() *boids {
 	b := &boids{count: 1}
 	b.reset()
-	b.grid = widget.NewCellGrid(boidsW, boidsH, boidsPitch, 1, widget.CellRound, b.cells[:], boidsPalette, colBG)
-	b.full = widget.NewCellGrid(boidsW, boidsH, 5, 1, widget.CellRound, b.cells[:], boidsPalette, colBG)
+	b.grid = newBoidsView(b, boidsW*boidsPitch, boidsH*boidsPitch)
+	b.full = newBoidsView(b, ScreenW, ScreenH)
+	b.tiles = [2]*boidsView{newBoidsView(b, tileW, tileH), newBoidsView(b, 2*tileW, 2*tileH)}
 	return b
 }
 
@@ -209,35 +216,64 @@ func octant(vx, vy int32) uint8 {
 	}
 }
 
-func (b *boids) render() {
-	// range over a slice: ranging over the array field copies it, and TinyGo
-	// puts the 3 KB copy on the heap every tick (findings F-35)
-	for i, v := range b.cells[:] { // heads become trail tops, trails fade
-		switch {
-		case v > boidsTrail:
-			b.cells[i] = boidsTrail
-		case v > 0:
-			b.cells[i] = v - 1
-		}
+// boidsUnitsPerM is the box's travel in the boids' world per metre the
+// badge moves: 1:1 on the glass (full screen a cell is 5 px, 0.6375 mm on
+// the 2.0" panel), as Pong's paddle.
+const boidsUnitsPerM = 1000 / 0.6375 * boidsFix
+
+// boidsFeel is the velocity a boid gains per tick per m/s² of apparent
+// acceleration (1/256 cell per tick); boidsFeelMin (m/s²) is noise.
+const (
+	boidsFeel    = 4
+	boidsFeelMin = 0.5
+)
+
+// turnTo turns the box (the window) to the badge's roll (radians,
+// clockwise as the viewer sees it): from the motion state's attitude.
+func (b *boids) turnTo(roll float32) {
+	d := roll - b.pose.angle
+	d -= 2 * math.Pi * float32(math.Round(float64(d/(2*math.Pi))))
+	b.pose.setAngle(b.pose.angle + d)
+}
+
+// moveTo puts the box where the badge is: right and up (m), the motion
+// state's displacement in the badge's own frame.
+func (b *boids) moveTo(right, up float32) {
+	b.pose.baseX = boidsW*boidsFix/2 + int32(right*boidsUnitsPerM)
+	b.pose.baseY = boidsH*boidsFix/2 - int32(up*boidsUnitsPerM)
+}
+
+// feel sets the apparent acceleration (screen axes, m/s²) the flock feels
+// from the badge's own acceleration: a shake stirs it.
+func (b *boids) feel(ax, ay float32) { b.feltX, b.feltY = ax, ay }
+
+// push gives every boid the velocity the felt acceleration adds this tick.
+func (b *boids) push() {
+	ax, ay := b.feltX, b.feltY
+	if ax*ax+ay*ay < boidsFeelMin*boidsFeelMin {
+		return
 	}
-	const hiX, hiY = boidsW*boidsFix - 1, boidsH*boidsFix - 1
+	vx, vy := b.pose.vecToWorld(int32(ax*boidsFeel), int32(ay*boidsFeel))
 	for i := range boidsN[b.count] {
-		bx, by := b.pose.toBox(b.x[i], b.y[i])
-		bx, by = min(max(bx, 0), hiX), min(max(by, 0), hiY)
-		c := int(by>>8)*boidsW + int(bx>>8)
-		b.cells[c] = boidsTrail + 1 + octant(b.pose.vecToBox(b.vx[i], b.vy[i]))
+		b.vx[i], b.vy[i] = limit(b.vx[i]+vx, b.vy[i]+vy)
 	}
 }
 
 func (b *boids) tick() {
 	t0 := time.Now()
 	b.pose.advance()
+	b.push()
 	b.step()
-	b.render()
+	cx, cy := b.pose.cx, b.pose.cy
+	b.histC[b.histI] = [2]int32{cx, cy}
+	for i := range boidsN[b.count] {
+		b.hist[i][b.histI] = [2]int16{int16(b.x[i] - cx), int16(b.y[i] - cy)}
+	}
+	b.histI = (b.histI + 1) % boidsHist
 	b.stepUS = time.Since(t0).Microseconds()
 }
 
-func (b *boids) fullGrid() *widget.CellGrid {
+func (b *boids) fullView() ui.Widget {
 	if b.fullOn {
 		return b.full
 	}
@@ -295,9 +331,8 @@ func (a *App) pageBoids() *page {
 	return p
 }
 
-func (b *boids) preview() []uint8      { return b.cells[:] }
-func (b *boids) palette() []color.RGBA { return boidsPalette }
-func (b *boids) showFull()             { b.fullOn = true }
+func (b *boids) tileViews() (ui.Widget, ui.Widget) { return b.tiles[0], b.tiles[1] }
+func (b *boids) showFull()                         { b.fullOn = true }
 
 // reset scatters every boid at a random place and heading in a straight box.
 func (b *boids) reset() {
@@ -308,5 +343,10 @@ func (b *boids) reset() {
 		b.vx[i] = int32(rand32()%(2*boidsVMax)) - boidsVMax
 		b.vy[i] = int32(rand32()%(2*boidsVMax)) - boidsVMax
 	}
-	clear(b.cells[:])
+	for k := range boidsHist { // no trail yet: every history slot is the start
+		b.histC[k] = [2]int32{b.pose.cx, b.pose.cy}
+		for i := range boidsMax {
+			b.hist[i][k] = [2]int16{int16(b.x[i] - b.pose.cx), int16(b.y[i] - b.pose.cy)}
+		}
+	}
 }

@@ -18,6 +18,7 @@ import (
 	"github.com/itohio/tinygui/examples/framebuffer"
 	"github.com/itohio/tinytufty2040/app"
 	"github.com/itohio/tinytufty2040/board"
+	"github.com/itohio/tinytufty2040/console"
 )
 
 // The frame is drawn in three 80-row bands into a 51.2 KB buffer: widgets draw
@@ -39,6 +40,7 @@ const frameTime = 33 * time.Millisecond
 
 func main() {
 	board.SetUSBSerial()
+	go serialWriter() // the one writer to USB (console.Ring)
 	waitForConsole(3 * time.Second)
 	boot("start")
 	var panel board.LCD
@@ -57,14 +59,19 @@ func main() {
 		}
 		return nil
 	})
+	imuOK := setupIMU()
+	boot("imu")
 	a := app.New(fb, hw, app.Config{
+		IMU:         imuOK,
 		DurationAdd: ui.DurationAdd,
 		DurationSub: ui.DurationSub,
-		Log:         func(s string) { println(s) },
+		Log:         func(s string) { var l console.Line; l.S(s).Send(&con) },
 		BuildID:     buildID,
 	}, time.Now())
 	boot("app")
-	reportIMU()
+	if !imuOK {
+		reportIMU() // another part, or none: gravity from the buttons
+	}
 
 	// USB serial console: line commands, see app.Handlers ("help").
 	handlers := a.Handlers()
@@ -77,11 +84,30 @@ func main() {
 	}
 	handlers["reboot"] = func([]byte) { arm.SystemReset() } // fresh state for scripted tours
 	handlers["pins"] = func([]byte) {
-		println("A", machine.BUTTON_A.Get(), "B", machine.BUTTON_B.Get(), "C", machine.BUTTON_C.Get(),
-			"UP", machine.BUTTON_UP.Get(), "DOWN", machine.BUTTON_DOWN.Get(), "USER", machine.BUTTON_USER.Get(),
-			"VBUS", machine.VBUS_DETECT.Get())
+		var l console.Line
+		l.S("A").B(machine.BUTTON_A.Get()).S("B").B(machine.BUTTON_B.Get()).S("C").B(machine.BUTTON_C.Get()).
+			S("UP").B(machine.BUTTON_UP.Get()).S("DOWN").B(machine.BUTTON_DOWN.Get()).S("USER").B(machine.BUTTON_USER.Get()).
+			S("VBUS").B(machine.VBUS_DETECT.Get()).Send(&con)
 	}
-	handlers["imu"] = func([]byte) { reportIMU() } // probe again after plugging a sensor in
+	handlers["imu"] = func([]byte) { // the sensor in use, or probe again after plugging one in
+		if mpu != nil {
+			var l console.Line
+			l.S("imu: MPU6050 at 0x68 drives gravity and the Motion page").Send(&con)
+			return
+		}
+		reportIMU()
+	}
+	handlers["imuread"] = func(arg []byte) { // imuread [n]: n samples at 10 Hz
+		n := 10
+		if len(arg) > 0 {
+			n = 0
+			for _, c := range arg {
+				n = n*10 + int(c-'0')
+			}
+		}
+		imuRead(n)
+	}
+	handlers["imuint"] = func([]byte) { imuINTCheck() }
 	mux := ui.NewCommandStreamMux(idleReader{ui.NewSerialReader(machine.Serial)}, handlers)
 	go mux.Run()
 
@@ -107,10 +133,15 @@ func main() {
 		if now.Sub(last) >= frameTime {
 			last = now
 			m0 := mallocs()
+			imuDrain(a) // every sample since the last frame (100 Hz): the shared motion state
 			a.Update(now)
 			m1 := mallocs()
 			if dumping = a.TakeDump(); dumping {
-				println("FB", app.ScreenW, app.ScreenH)
+				con.Stream() // header, pixels, END: nothing else in between
+				var l console.Line
+				l.S("FB").I(app.ScreenW).I(app.ScreenH)
+				con.Write(l.Bytes())
+				con.Write(lineEnd[:])
 			}
 			var draw, push time.Duration
 			var md, mp uint64
@@ -131,8 +162,8 @@ func main() {
 			a.ReportFrame(time.Since(now))
 			a.ReportAllocs(int(m1-m0), int(md), int(mp))
 			if dumping {
-				println()
-				println("END")
+				con.Write(dumpEnd[:])
+				con.EndStream()
 			}
 			if first { // light the panel only after the first full frame
 				first = false
@@ -165,7 +196,7 @@ func mallocs() uint64 {
 }
 
 // dumpRows streams pixels over USB serial as big-endian RGB565. The frame
-// loop frames a full dump as: line "FB 320 240", 153 600 bytes (both bands),
+// loop frames a full dump as: line "FB 320 240", 153 600 bytes (all three bands),
 // newline, line "END" — a raw screenshot without a camera.
 func dumpRows(pix []uint16) {
 	var buf [512]byte
@@ -174,12 +205,41 @@ func dumpRows(pix []uint16) {
 		buf[n], buf[n+1] = byte(p>>8), byte(p)
 		n += 2
 		if n == len(buf) {
-			_, _ = machine.Serial.Write(buf[:n])
+			con.Write(buf[:n]) // within the dump's stream (frame loop)
 			n = 0
 		}
 	}
 	if n > 0 {
-		_, _ = machine.Serial.Write(buf[:n])
+		con.Write(buf[:n])
+	}
+}
+
+// con is the one serial writer's queue: every byte the firmware sends goes
+// through it (review R-TG-1 T4, T5).
+var con console.Ring
+
+var (
+	lineEnd = [1]byte{'\n'}
+	dumpEnd = [5]byte{'\n', 'E', 'N', 'D', '\n'}
+)
+
+// serialWriter drains con into the USB serial port: the only goroutine that
+// writes to it, so a host holding the port open without reading stalls this
+// goroutine, not the frame loop, and nothing interleaves. Lines dropped
+// because the queue was full are reported once it has room again.
+func serialWriter() {
+	var buf [256]byte
+	for {
+		if n := con.Drain(buf[:]); n > 0 {
+			_, _ = machine.Serial.Write(buf[:n])
+			continue
+		}
+		if d := con.Dropped(); d > 0 {
+			var l console.Line
+			l.S("console: lines dropped (queue full)").U(uint64(d)).Send(&con)
+			continue
+		}
+		time.Sleep(2 * time.Millisecond)
 	}
 }
 
@@ -195,16 +255,19 @@ func waitForConsole(d time.Duration) {
 func boot(stage string) {
 	var m runtime.MemStats
 	runtime.ReadMemStats(&m)
-	println("boot:", stage, "heap_alloc", m.HeapAlloc, "heap_sys", m.HeapSys)
+	var l console.Line
+	l.S("boot:").S(stage).S("heap_alloc").U(m.HeapAlloc).S("heap_sys").U(m.HeapSys).Send(&con)
 }
 
-// reportIMU logs the motion sensor on Qw/ST, if any. Until EasyRobot's driver
-// for the part is in, gravity follows the buttons either way.
+// reportIMU logs a motion sensor found without a driver here (or none):
+// gravity then follows the buttons.
 func reportIMU() {
 	imu, ok := board.ProbeIMU()
 	if !ok {
-		println("imu: none on Qw/ST: gravity from the buttons")
+		var l console.Line
+		l.S("imu: none found: gravity from the buttons").Send(&con)
 		return
 	}
-	println("imu:", imu.Name, "at", imu.Addr, "WHO_AM_I", imu.ID, "(no driver yet: gravity from the buttons)")
+	var l console.Line
+	l.S("imu:").S(imu.Name).S("at").U(uint64(imu.Addr)).S("WHO_AM_I").U(uint64(imu.ID)).S("(no driver for it: gravity from the buttons)").Send(&con)
 }

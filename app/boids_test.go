@@ -1,6 +1,9 @@
 package app
 
-import "testing"
+import (
+	"math"
+	"testing"
+)
 
 // Over many steps with the largest flock, while the box turns, spins and
 // shakes and the flock scatters, every boid stays inside the box and flies
@@ -40,7 +43,7 @@ func TestBoidsStayInTheBoxWithinSpeed(t *testing.T) {
 func TestBoidsKeepTheirWorldHeadingWhenTheBoxTurns(t *testing.T) {
 	b := newBoids()
 	for angle := range 256 {
-		b.pose.angle = angle
+		b.pose.setAngle(float32(angle) * 2 * math.Pi / 256)
 		b.x[0], b.y[0] = b.pose.cx+3*boidsFix, b.pose.cy-2*boidsFix
 		b.vx[0], b.vy[0] = boidsVMax, 0
 		b.walls(0)
@@ -48,7 +51,7 @@ func TestBoidsKeepTheirWorldHeadingWhenTheBoxTurns(t *testing.T) {
 			t.Fatalf("angle %d: a boid in the middle was changed to %d,%d v %d,%d", angle, b.x[0], b.y[0], b.vx[0], b.vy[0])
 		}
 	}
-	b.pose.angle = 64 // a quarter turn: east in the world is vertical on screen
+	b.pose.setAngle(math.Pi / 2) // a quarter turn: east in the world is vertical on screen
 	if vx, vy := b.pose.vecToBox(boidsVMax, 0); abs32(vx) > 1 || abs32(vy) < boidsVMax-1 {
 		t.Fatalf("after a quarter turn the boid should fly vertically on screen, got %d,%d", vx, vy)
 	}
@@ -87,5 +90,29 @@ func TestOctantFollowsHeading(t *testing.T) {
 		if got := octant(c.vx, c.vy); got != c.want {
 			t.Errorf("octant(%d,%d) = %d, want %d", c.vx, c.vy, got, c.want)
 		}
+	}
+}
+
+// The flock feels the badge's own acceleration (owner 2026-11-13: boids
+// feel the specific force): thrown, it drifts the other way, as if left
+// behind; a still badge leaves it alone.
+func TestBoidsFeelTheBadgesAcceleration(t *testing.T) {
+	mean := func(felt float32) float64 {
+		rngState = 2463534242
+		b := newBoids()
+		b.feel(felt, 0)
+		var s float64
+		for range 10 {
+			b.tick()
+		}
+		n := boidsN[b.count]
+		for i := range n {
+			s += float64(b.vx[i])
+		}
+		return s / float64(n)
+	}
+	still, felt := mean(0), mean(4)
+	if felt-still < 10 {
+		t.Fatalf("4 m/s² felt to the right: the flock's mean vx %+.0f, still badge %+.0f; want it pushed right", felt, still)
 	}
 }

@@ -1,7 +1,6 @@
 package app
 
 import (
-	"image/color"
 	"time"
 
 	ui "github.com/itohio/tinygui"
@@ -10,32 +9,32 @@ import (
 	"github.com/itohio/tinygui/widget"
 )
 
-// The Demos page: every demo runs live in a tile, drawn by the same
-// CellGrid as its page (64×48 cells at 1 px; 2 px for the focused tile, which
-// grows, so the rows are laid out again: layout.Wrap with centred rows).
-// A opens the focused demo full screen, B there comes back.
+// The Demos page: every demo runs live in a tile, drawn by its own view at
+// 64×48 px, 128×96 for the focused tile, which grows, so the rows are laid
+// out again (layout.Wrap with centred rows). A opens the focused demo full
+// screen, B there comes back.
 
 // previewer is a demo that can be shown in a tile.
 type previewer interface {
 	demo
-	// preview is the 64×48 cells to show now (called from Update).
-	preview() []uint8
-	palette() []color.RGBA
+	// tileViews are the tile's widgets: tileW×tileH, and twice that for
+	// the focused tile.
+	tileViews() (small, big ui.Widget)
 	showFull()
 	reset()
 }
 
 const (
-	tileCols, tileRows = 64, 48
-	tileBorder         = 2
-	tileLabelH         = 12
+	tileW, tileH = 64, 48
+	tileBorder   = 2
+	tileLabelH   = 12
 )
 
 type tile struct {
 	ui.WidgetBase
 	name           string
 	d              previewer
-	small, big     *widget.CellGrid
+	small, big     ui.Widget
 	tickUS, drawUS int64
 	drawAcc        int64 // summed over the bands of one frame
 	open           func(*tile)
@@ -43,9 +42,7 @@ type tile struct {
 
 func newTile(name string, d previewer, open func(*tile)) *tile {
 	t := &tile{name: name, d: d, open: open}
-	cells, pal := d.preview(), d.palette()
-	t.small = widget.NewCellGrid(tileCols, tileRows, 1, 0, widget.CellSquare, cells, pal, colBG)
-	t.big = widget.NewCellGrid(tileCols, tileRows, 2, 0, widget.CellSquare, cells, pal, colBG)
+	t.small, t.big = d.tileViews()
 	t.WidgetBase = ui.NewWidgetBase(t.sizeFor(false))
 	return t
 }
@@ -124,18 +121,16 @@ func (m *menu) tick() {
 		for range steps {
 			t.d.tick()
 		}
-		cells := t.d.preview()
-		t.small.Cells, t.big.Cells = cells, cells
 		t.tickUS = time.Since(t0).Microseconds()
 		t.drawUS, t.drawAcc = t.drawAcc, 0
 	}
 }
 
-func (m *menu) fullGrid() *widget.CellGrid {
+func (m *menu) fullView() ui.Widget {
 	if m.full == nil {
 		return nil
 	}
-	g := m.full.d.fullGrid()
+	g := m.full.d.fullView()
 	if g == nil { // the demo left full screen (B)
 		m.full = nil
 	}

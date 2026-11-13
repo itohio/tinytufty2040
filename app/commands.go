@@ -1,6 +1,9 @@
 package app
 
-import "time"
+import (
+	"math"
+	"time"
+)
 
 // Serial console. The board feeds ui.CommandStreamMux with these handlers;
 // handlers only enqueue, and Update executes them on the UI goroutine, so the
@@ -18,14 +21,14 @@ type command struct {
 var helpLines = [...]string{
 	"commands: up|down|a|b|c [long], user <ms>, page <n>",
 	"led <0-100>, bl <10-100>, saver [0|1], solid [0-255]",
-	"stats, tiles, frames, mem, memshow [0|1], light [raw|-1]",
+	"stats, tiles, frames, mem, memshow [0|1], light [raw|-1], tilt, motion",
 	"dump, version, help",
 }
 
 // Handlers returns the command table for ui.NewCommandStreamMux.
 func (a *App) Handlers() map[string]func([]byte) {
 	m := map[string]func([]byte){}
-	for _, name := range []string{"up", "down", "a", "b", "c", "user", "page", "led", "bl", "saver", "solid", "stats", "tiles", "frames", "mem", "memshow", "light", "dump", "version", "help"} {
+	for _, name := range []string{"up", "down", "a", "b", "c", "user", "page", "led", "bl", "saver", "solid", "stats", "tiles", "frames", "mem", "memshow", "light", "tilt", "motion", "dump", "version", "help"} {
 		m[name] = func(arg []byte) { a.Command(name, string(arg)) }
 	}
 	return m
@@ -93,6 +96,8 @@ func (a *App) exec(c command) {
 		}
 		a.log(a.txtStat.reset().str("light raw ").int(int(a.lightRaw)).str(" median ").int(int(a.lightFilt.med)).
 			str(" pct ").int(a.lightShown).str(" backlight ").int(a.backlight).String())
+	case "tilt": // the in-plane gravity the demos use, as an angle from screen-down
+		a.logTilt()
 	case "frames": // frame-time histogram and GCs since the last call
 		a.framesReport()
 	case "mem": // live heap after a collection
@@ -104,6 +109,8 @@ func (a *App) exec(c command) {
 		}
 	case "version": // the firmware's build ID (tools/build)
 		a.log2("build ", a.cfg.BuildID)
+	case "motion": // the shared motion state as the demos read it (verify2: measurable at rest)
+		a.motionReport()
 	case "help":
 		for _, l := range helpLines {
 			a.log(l)
@@ -139,4 +146,51 @@ func clampi(v, lo, hi int) int {
 		return hi
 	}
 	return v
+}
+
+// logTilt logs the in-plane gravity the demos use: the angle from screen-down
+// (tenths of a degree), the side it leans to, and its size, e.g. "gravity 4.3
+// deg toward screen left, in-plane 9.8 m/s2" — which side of the badge is
+// lower; a small in-plane size means the badge lies nearly flat and the
+// angle means little.
+func (a *App) logTilt() {
+	if !a.tilted {
+		a.log("gravity: no direction (flat, or no motion sensor)")
+		return
+	}
+	deg := math.Atan2(float64(a.tiltX), float64(a.tiltY)) * 180 / math.Pi
+	side := " deg toward screen right"
+	if deg < 0 {
+		deg, side = -deg, " deg toward screen left"
+	}
+	tenths := int(math.Round(deg * 10))
+	mag := int(math.Round(math.Hypot(float64(a.tiltX), float64(a.tiltY)) * 10))
+	a.log3(a.txtStat.reset().str("gravity ").int(tenths/10).str(".").int(tenths%10).String(), side,
+		a.txtLog.reset().str(", in-plane ").int(mag/10).str(".").int(mag%10).str(" m/s2").String())
+}
+
+// motionReport logs the shared motion state the demos read: the world
+// position and the badge-frame displacement in µm (the Motion page shows
+// whole cm; the paddle moves 0.13 mm a pixel), how many samples the strapdown called rest since the last
+// report, and what moves on screen: Pong's paddle row (px) and the boids'
+// window offset (tenths of a cell).
+func (a *App) motionReport() {
+	m := a.motion
+	if m == nil {
+		a.log("motion: no IMU")
+		return
+	}
+	um := func(v float32) int { return int(v * 1e6) }
+	a.log(a.txtStat.reset().str("motion P ").int(um(m.nav.P[0])).str(" ").int(um(m.nav.P[1])).str(" ").int(um(m.nav.P[2])).
+		str(" um disp ").int(um(m.disp[0])).str(" ").int(um(m.disp[1])).str(" ").int(um(m.disp[2])).str(" um").String())
+	rest := 0
+	if m.sampleN > 0 {
+		rest = m.restN * 100 / m.sampleN
+	}
+	b := a.boids
+	a.log(a.txtStat.reset().str("rest ").int(rest).str("% of ").int(m.sampleN).str(" settled ").int(btoi(m.settled)).
+		str(" pad ").int(int(a.pong.pad[0] / (pongFix / 5))).
+		str(" win ").int(int((b.pose.baseX - boidsW*boidsFix/2) * 10 / boidsFix)).str(" ").int(int((b.pose.baseY - boidsH*boidsFix/2) * 10 / boidsFix)).
+		str(" false ").int(m.falseN).str(" moves ").int(m.movesN).String())
+	m.sampleN, m.restN, m.falseN, m.movesN = 0, 0, 0, 0
 }

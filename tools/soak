@@ -42,6 +42,7 @@ pages = [
     ("Fire", top(6) + ["down"] * 3 + ["a", "sleep:0.8", "b"]),      # Full
     ("Pong", top(3) + ["down", "a", "sleep:0.8", "b"]),             # You: a game
     ("Boids", top(5) + ["down"] * 3 + ["a", "sleep:0.8", "b"]),     # Full
+    ("Motion", top(2) + ["a", "sleep:0.8", "b"]),                   # Full (with an IMU)
 ]
 
 cmds = ["frames", "mem"]

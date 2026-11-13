@@ -26,7 +26,7 @@ func needMallocCount(t *testing.T) {
 	}
 }
 
-// The demo effects (Life, water, fire, Pong, boids; their
+// The demo effects (Life, water, fire, Pong, boids, Motion; their
 // pages and full-screen views) run without allocating after setup: owner,
 // "the tinygui should be ABLE to run without GC at all … all the demo
 // effects should run without allocation too". Exact under TinyGo
@@ -52,7 +52,7 @@ func TestEffectsRunWithoutAllocating(t *testing.T) {
 	fulls := map[string]func(){
 		"Life": func() { a.life.fullOn = true }, "Water": func() { a.water.fullOn = true },
 		"Fire": func() { a.fire.fullOn = true }, "Pong": func() { a.pong.showFull() },
-		"Boids": func() { a.boids.fullOn = true },
+		"Boids": func() { a.boids.fullOn = true }, "Motion": func() { a.motionDemo.fullOn = true },
 	}
 	for i := range a.pages.Count() {
 		name := a.pages.Name(i)

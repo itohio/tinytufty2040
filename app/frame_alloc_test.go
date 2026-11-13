@@ -16,15 +16,16 @@ func (testHW) Battery() (float32, bool) { return 3.9, false }
 func (testHW) SetLED(int)               {}
 func (testHW) SetBacklight(int)         {}
 
-// framedApp is the app with every page and a frame as the badge runs it:
-// sensor sample, Update, three 80-row bands.
+// framedApp is the app with an IMU (every page, the Motion page too) and a
+// frame as the badge runs it: sensor sample, Update, three 80-row bands.
 func framedApp() (*App, func()) {
 	fb := framebuffer.New(ScreenW, 80, make([]uint16, ScreenW*80), nil)
 	id := func(d, x time.Duration) time.Duration { return d }
 	now := time.Now()
-	a := New(fb, testHW{}, Config{DurationAdd: id, DurationSub: id}, now)
+	a := New(fb, testHW{}, Config{DurationAdd: id, DurationSub: id, IMU: true}, now)
 	frame := func() {
 		now = now.Add(33 * time.Millisecond)
+		a.SetIMU([3]float32{-1.5, 9.4, 1.5}, [3]float32{0.01, -0.02, 0.005}, 0.033)
 		a.Update(now)
 		for b := range 3 {
 			fb.SetY0(int16(b * 80))
@@ -70,6 +71,7 @@ var menuRound = []struct{ page, steps string }{
 	{"Fire", "u u u u u u d d d a f b"},
 	{"Pong", "u u u d a f b"},
 	{"Boids", "u u u u u d d d a f b"},
+	{"Motion", "u u a f b"},
 }
 
 func playRound(t *testing.T, a *App, frame func()) {

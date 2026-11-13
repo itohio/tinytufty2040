@@ -3,6 +3,7 @@ package app
 import (
 	"image/color"
 
+	ui "github.com/itohio/tinygui"
 	"github.com/itohio/tinygui/layout"
 	"github.com/itohio/tinygui/widget"
 )
@@ -36,7 +37,8 @@ type life struct {
 	pattern     int
 	gen         int
 	grid        *widget.CellGrid
-	full        *widget.CellGrid // 5 px LEDs on the whole screen
+	full        *widget.CellGrid    // 5 px LEDs on the whole screen
+	tiles       [2]*widget.CellGrid // the Demos tile: 1 px, 2 px focused
 	fullOn      bool
 	txt         textBuf
 	log2        func(p1, p2 string) // App.log2: two parts, no string built
@@ -50,6 +52,8 @@ func newLife() *life {
 	}
 	l.grid = widget.NewCellGrid(lifeCols, lifeRows, lifePitch, 1, widget.CellRound, l.cells[:], lifePalette, colBG)
 	l.full = widget.NewCellGrid(lifeCols, lifeRows, 5, 1, widget.CellRound, l.cells[:], lifePalette, colBG)
+	l.tiles[0] = widget.NewCellGrid(lifeCols, lifeRows, 1, 0, widget.CellSquare, l.cells[:], lifePalette, colBG)
+	l.tiles[1] = widget.NewCellGrid(lifeCols, lifeRows, 2, 0, widget.CellSquare, l.cells[:], lifePalette, colBG)
 	l.seed()
 	return l
 }
@@ -162,7 +166,7 @@ func (l *life) tick() {
 	}
 }
 
-func (l *life) fullGrid() *widget.CellGrid {
+func (l *life) fullView() ui.Widget {
 	if l.fullOn {
 		return l.full
 	}
@@ -192,8 +196,7 @@ func (l *life) fullPress(b Button) bool {
 	return true
 }
 
-func (l *life) preview() []uint8      { return l.cells[:] }
-func (l *life) palette() []color.RGBA { return lifePalette }
-func (l *life) showFull()             { l.fullOn = true }
+func (l *life) tileViews() (ui.Widget, ui.Widget) { return l.tiles[0], l.tiles[1] }
+func (l *life) showFull()                         { l.fullOn = true }
 
 func (l *life) reset() { l.seed() }

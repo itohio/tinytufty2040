@@ -12,53 +12,55 @@ import "math"
 // same pose.
 
 const (
-	boxTurnStep = 16       // a button press turns the box 22.5° (256 = 360°)
-	boxShake    = 10 * 256 // how far a shake throws the box (world units)
-	boxShakeLen = 20       // ticks of a shake (out and back)
+	boxTurnStep = math.Pi / 8   // a button press turns the box 22.5°
+	boxTurnRate = math.Pi / 128 // the box sweeps at most this far per tick
+	boxShake    = 10 * 256      // how far a shake throws the box (world units)
+	boxShakeLen = 20            // ticks of a shake (out and back)
 	q14         = 1 << 14
 )
 
-// sinQ14 is sin(2πi/256) in Q14.
-var sinQ14 = func() (t [256]int32) {
-	for i := range t {
-		t[i] = int32(math.Round(math.Sin(2*math.Pi*float64(i)/256) * q14))
-	}
-	return
-}()
-
+// boxPose is where the screen's box sits in the boids' world: a centre and
+// an angle in radians (clockwise as seen by the viewer). The angle is kept
+// at full precision (it follows the IMU's roll); its sine and cosine are
+// computed once when it changes, in Q14 for the per-boid transforms.
 type boxPose struct {
-	angle, target int // current and wanted angle, unwrapped (256 per turn)
+	angle, target float32 // current and wanted angle (radians, unwrapped)
+	sin, cos      int32   // of angle, Q14
 	spin          bool
 	baseX, baseY  int32 // centre without the shake
 	cx, cy        int32 // centre now
 	shakeT        int   // ticks into a shake, 0 when still
 	shakeDX       int32
 	shakeDY       int32
-	frame         int
 }
 
 func newBoxPose() boxPose {
-	c := boxPose{baseX: boidsW * boidsFix / 2, baseY: boidsH * boidsFix / 2}
+	c := boxPose{baseX: boidsW * boidsFix / 2, baseY: boidsH * boidsFix / 2, cos: q14}
 	c.cx, c.cy = c.baseX, c.baseY
 	return c
 }
 
-func (p *boxPose) sincos() (int32, int32) {
-	a := uint8(p.angle)
-	return sinQ14[a], sinQ14[uint8(a+64)]
+// setAngle turns the box to a (radians) at once.
+func (p *boxPose) setAngle(a float32) {
+	p.angle, p.target = a, a
+	p.trig()
 }
+
+func (p *boxPose) trig() {
+	s, c := math.Sincos(float64(p.angle))
+	p.sin, p.cos = int32(math.Round(s*q14)), int32(math.Round(c*q14))
+}
+
+func (p *boxPose) sincos() (int32, int32) { return p.sin, p.cos }
 
 // advance moves the box one tick towards its target angle and along a shake.
 func (p *boxPose) advance() {
-	p.frame++
-	if p.spin && p.frame&1 == 0 {
-		p.target++
+	if p.spin {
+		p.target += boxTurnRate / 2
 	}
-	switch {
-	case p.angle < p.target:
-		p.angle++
-	case p.angle > p.target:
-		p.angle--
+	if d := p.target - p.angle; d != 0 {
+		p.angle += min(max(d, -boxTurnRate), boxTurnRate)
+		p.trig()
 	}
 	p.cx, p.cy = p.baseX, p.baseY
 	if p.shakeT > 0 {
@@ -74,8 +76,8 @@ func (p *boxPose) advance() {
 
 // shake throws the box in a random direction and back.
 func (p *boxPose) shake() {
-	a := uint8(rand32())
-	p.shakeDX, p.shakeDY = sinQ14[uint8(a+64)]*boxShake/q14, sinQ14[a]*boxShake/q14
+	s, c := math.Sincos(float64(rand32()%628) / 100)
+	p.shakeDX, p.shakeDY = int32(c*boxShake), int32(s*boxShake)
 	p.shakeT = 1
 }
 

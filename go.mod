@@ -1,6 +1,6 @@
 module github.com/itohio/tinytufty2040
 
-go 1.23.4
+go 1.25
 
 require (
 	github.com/itohio/tinygui v0.0.0
@@ -8,8 +8,18 @@ require (
 	tinygo.org/x/tinyfont v0.6.0
 )
 
-require github.com/google/shlex v0.0.0-20191202100458-e7afc7fbc510 // indirect
+require (
+	github.com/chewxy/math32 v1.11.1 // indirect
+	github.com/google/shlex v0.0.0-20191202100458-e7afc7fbc510 // indirect
+	golang.org/x/sys v0.37.0 // indirect
+)
 
 // tinygui is developed next to this repo; the demo builds against the local
 // checkout (no published version yet).
 replace github.com/itohio/tinygui => ../tinygui
+
+require github.com/itohio/EasyRobot v0.0.0
+
+// EasyRobot (MPU6050 driver, Mahony, strapdown, flip) is developed next to
+// this repo too; the demo builds against the local checkout.
+replace github.com/itohio/EasyRobot => ../EasyRobot

@@ -53,3 +53,24 @@ func TestPongBallStaysOnCourt(t *testing.T) {
 		}
 	}
 }
+
+// Paused, UP/DOWN still move your paddle where it is drawn, at once, and
+// resuming doesn't make it jump (verify2 TG-pong-paddle: the paddle stayed
+// put while paused and leapt 6 cells on resume).
+func TestPongPausedPaddleMovesWithButtons(t *testing.T) {
+	p := newPong()
+	p.showFull()
+	p.fullPress(BtnA) // pause
+	before := p.pad[0]
+	p.fullPress(BtnUp)
+	p.tick()
+	if got, want := p.pad[0], before-6*pongFix; got != want {
+		t.Fatalf("paused, UP: paddle at %.1f cells, want %.1f (6 up, drawn now)", float32(got)/pongFix, float32(want)/pongFix)
+	}
+	p.fullPress(BtnA) // resume
+	moved := p.pad[0]
+	p.tick()
+	if d := p.pad[0] - moved; d != 0 {
+		t.Fatalf("on resume the paddle moved %.1f cells by itself", float32(d)/pongFix)
+	}
+}
