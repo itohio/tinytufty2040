@@ -28,10 +28,12 @@ var (
 )
 
 // setupIMU configures the MPU6050 if it answers on I2C0 (GPIO4 SDA, GPIO5
-// SCL, the Qw/ST and JP1 nets).
+// SCL, the Qw/ST and JP1 nets). The bus runs at 400 kHz (the MPU6050's fast
+// mode): at 100 kHz each 12-byte sample took 1.3 ms of bus time, 13 % of the
+// CPU at 100 Hz (TG-5 #4's profile).
 func setupIMU() bool {
 	i2cRecover(machine.GPIO4, machine.GPIO5)
-	if err := machine.I2C0.Configure(machine.I2CConfig{SDA: machine.GPIO4, SCL: machine.GPIO5, Frequency: 100_000}); err != nil {
+	if err := machine.I2C0.Configure(machine.I2CConfig{SDA: machine.GPIO4, SCL: machine.GPIO5, Frequency: 400_000}); err != nil {
 		return false
 	}
 	d := mpu6050.New(machine.I2C0, 0)
