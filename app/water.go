@@ -9,7 +9,8 @@ import (
 	"github.com/itohio/tinygui/widget"
 )
 
-// Water: EasyRobot's particle liquid (fluid.go), drawn as an LED matrix on widget.CellGrid: the engine's
+// Water: EasyRobot's particle liquid (fluid.go; the engine Water shares with
+// Fire's fuel), drawn as an LED matrix on widget.CellGrid: the engine's
 // raster, 64×48 (its box's aspect), shaded in place: the surface is foam,
 // deeper water darker.
 const (
@@ -29,9 +30,12 @@ var waterPalette = []color.RGBA{
 }
 
 type water struct {
+	share  *liquidShare // the engine, shared with Fire's fuel (fluid.go)
 	fl     fluid
-	dir    int  // gravity's nearest lattice direction (buttons, the page's choice, shading)
-	pour   bool // a stream lifted from the surface pours in opposite to gravity
+	dir    int        // gravity's nearest lattice direction (buttons, the page's choice, shading)
+	pinned bool       // dir was picked by hand: the IMU's tilt waits until the page is shown again
+	pour   bool       // a stream lifted from the surface pours in opposite to gravity
+	g      [2]float32 // the gravity Water last set (screen axes, m/s²), passed on after a claim
 	shade  [waterW * waterH]uint8
 	cells  int
 	stepUS int64
@@ -47,19 +51,36 @@ type water struct {
 	log2    func(p1, p2 string) // App.log2: two parts, no string built
 }
 
-func newWater() *water {
-	w := &water{fl: newFlipFluid()}
+func newWater(share *liquidShare) *water {
+	w := &water{share: share, fl: share.fl, g: [2]float32{0, gravity}}
 	w.grid = widget.NewCellGrid(waterW, waterH, waterPitch, 1, widget.CellRound, w.shade[:], waterPalette, colBG)
 	w.full[0] = widget.NewCellGrid(waterW, waterH, 5, 1, widget.CellRound, w.shade[:], waterPalette, colBG)
 	w.full[1] = widget.NewCellGrid(waterW, waterH, 4, 1, widget.CellRound, w.shade[:], waterPalette, colBG)
 	w.tiles[0] = widget.NewCellGrid(waterW, waterH, 1, 0, widget.CellSquare, w.shade[:], waterPalette, colBG)
 	w.tiles[1] = widget.NewCellGrid(waterW, waterH, 2, 0, widget.CellSquare, w.shade[:], waterPalette, colBG)
-	w.fill()
+	w.claim()
 	return w
 }
 
-// step advances the liquid and shades it for the grid.
+// claim takes the shared engine for Water (its page or full screen is
+// shown), laying the basin afresh if Fire had it.
+func (w *water) claim() { w.claimN(waterN) }
+
+func (w *water) claimN(n int) {
+	if w.share.claim(w, n) {
+		w.useGravity()
+		w.render()
+	}
+}
+
+func (w *water) active() bool { return w.share.owner == w }
+
+// step advances the liquid and shades it for the grid (only while Water
+// has the engine).
 func (w *water) step() {
+	if !w.active() {
+		return
+	}
 	t0 := time.Now()
 	if w.pour { // two units a step, lifted from the surface, enter opposite to gravity
 		g := gravityVec[w.dir]
@@ -77,6 +98,7 @@ func (w *water) render() {
 
 // fill resets to the basin's liquid lying level.
 func (w *water) fill() {
+	w.claim()
 	w.fl.Reset()
 	w.render()
 }
@@ -84,18 +106,39 @@ func (w *water) fill() {
 // setTilt: gravity from the motion state (screen axes, m/s²).
 func (w *water) setTilt(gx, gy float32) {
 	w.dir, _, _ = latticeSplit(gx, gy)
-	w.fl.SetGravity(gx, gy)
+	w.g = [2]float32{gx, gy}
+	if w.active() {
+		w.fl.SetGravity(gx, gy)
+	}
 }
 
-// turn rotates gravity by steps of 45° (buttons).
-func (w *water) turn(by int) {
-	w.dir = (w.dir + by) & 7
+// useGravity passes the last gravity on to the engine (after a claim).
+func (w *water) useGravity() { w.fl.SetGravity(w.g[0], w.g[1]) }
+
+// turn rotates gravity by steps of 45° (buttons); it holds like a pick.
+func (w *water) turn(by int) { w.pick((w.dir + by) & 7) }
+
+// pick sets gravity to a lattice direction chosen by hand (the page's
+// Gravity choice, the buttons) and holds it against the IMU until the page
+// is shown again (unpin): without the hold, the shared motion state put the
+// badge's own gravity back at every sample.
+func (w *water) pick(dir int) {
+	w.dir, w.pinned = dir&7, true
 	w.useDir()
 }
 
+// unpin follows the badge's gravity again (its page shown afresh).
+func (w *water) unpin() { w.pinned = false }
+
 // useDir sets the engine's gravity to the lattice direction dir (the
 // buttons, the page's choice).
-func (w *water) useDir() { w.fl.SetGravity(gravityOf(w.dir)) }
+func (w *water) useDir() {
+	gx, gy := gravityOf(w.dir)
+	w.g = [2]float32{gx, gy}
+	if w.active() {
+		w.fl.SetGravity(gx, gy)
+	}
+}
 
 func (w *water) count() int { return w.fl.Count() }
 
@@ -110,7 +153,7 @@ func (w *water) fullView() ui.Widget {
 }
 
 func (w *water) tileViews() (ui.Widget, ui.Widget) { return w.tiles[0], w.tiles[1] }
-func (w *water) showFull()                         { w.fullOn = true }
+func (w *water) showFull()                         { w.claim(); w.fullOn = true }
 
 // waterDepthShade maps depth below the surface (along gravity) to a palette
 // index: 0 is the surface (foam), deeper is darker. A table, not a division.
@@ -164,7 +207,7 @@ func (a *App) pageWater() *page {
 	w := a.water
 	grav := widget.NewInteractiveLabelChoice(52, 11, gravityNames,
 		widget.WithLabelChoiceIndex(&w.dir), widget.WithLabelChoiceFont(fontBody), widget.WithLabelChoiceColor(colFG),
-		widget.WithLabelChoiceChange(func(i int, s string) { w.dir = i; w.useDir(); a.log2("gravity ", s) }))
+		widget.WithLabelChoiceChange(func(i int, s string) { w.pick(i); a.log2("gravity ", s) }))
 	pour := widget.NewToggle(44, 12, fontBody, colFG, "ON", "OFF", colGood, colTrack,
 		func() bool { return w.pour }, func(v bool) { w.pour = v })
 	reset := widget.NewToggle(44, 12, fontBody, colFG, "FILL", "FILL", colTrack, colTrack,

@@ -58,7 +58,17 @@ func gravityScore(i int, gx, gy float32) float32 {
 	return s
 }
 
-func (w *water) tilt(gx, gy float32) { w.setTilt(gx, gy) }
+func (w *water) tilt(gx, gy float32) {
+	if !w.pinned {
+		w.setTilt(gx, gy)
+	}
+}
+
+func (f *fire) tilt(gx, gy float32) {
+	if !f.pinned {
+		f.setTilt(gx, gy)
+	}
+}
 
 // tilt turns the boids' box by the badge's roll (the walls move, the flock
 // keeps its world heading): exactly, from the shortest way round.

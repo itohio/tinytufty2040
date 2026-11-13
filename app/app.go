@@ -189,10 +189,14 @@ const (
 // they live as long as the App, their pages are built around them on demand.
 func (a *App) initDemos(cfg Config) {
 	imu := cfg.IMU
-	a.life, a.water, a.fire, a.pong, a.boids = newLife(), newWater(), newFire(), newPong(), newBoids()
+	// one liquid engine for Water and Fire's fuel (fluid.go): Fire first, so
+	// Water holds it at boot
+	share := &liquidShare{fl: newFlipFluid()}
+	a.fire = newFire(share)
+	a.life, a.water, a.pong, a.boids = newLife(), newWater(share), newPong(), newBoids()
 	a.life.log2, a.water.log2, a.fire.log2 = a.log2, a.log2, a.log2
 	a.pong.log, a.boids.log = a.log, a.log
-	a.tilters = []tilter{a.water} // the boids follow the whole motion state (applyMotion)
+	a.tilters = []tilter{a.water, a.fire} // the boids follow the whole motion state (applyMotion)
 	a.menu = a.newMenu([]string{"Life", "Water", "Fire", "Pong", "Boids"},
 		[]previewer{a.life, a.water, a.fire, a.pong, a.boids})
 	if imu {
@@ -605,6 +609,12 @@ func (a *App) afterShow() {
 	p.root.Interact(ui.USER)
 	if p.root.Index() < 0 && p.nav.Depth() == 1 {
 		p.nav.Focus(0) // a page shown after an idle timeout starts focused
+	}
+	if c, ok := a.demoOf[a.cur].(interface{ claim() }); ok {
+		c.claim() // Water or Fire shown: it takes the shared liquid engine
+	}
+	if u, ok := a.demoOf[a.cur].(interface{ unpin() }); ok {
+		u.unpin() // a gravity picked on the last visit gives way to the badge's
 	}
 	a.log2("page ", p.name)
 }

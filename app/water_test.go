@@ -6,6 +6,8 @@ import (
 	"testing"
 )
 
+func newTestShare() *liquidShare { return &liquidShare{fl: newFlipFluid()} }
+
 // litCentre is the centre of the lit cells of a w-wide raster (cells).
 func litCentre(cells []uint8, w int) (x, y float64, n int) {
 	for i, v := range cells {
@@ -26,7 +28,7 @@ func litCentre(cells []uint8, w int) (x, y float64, n int) {
 // with gaps between every one): below the surface of each column, at most
 // a few cells inside the pool are dark.
 func TestRestingPoolHasNoHoles(t *testing.T) {
-	w := newWater()
+	w := newWater(newTestShare())
 	for range 1200 {
 		w.step()
 	}
@@ -69,7 +71,7 @@ func TestRestingPoolHasNoHoles(t *testing.T) {
 // water "not reacting to gravity change").
 func TestWaterFollowsEveryGravityDirection(t *testing.T) {
 	for d := range gravityVec {
-		w := newWater()
+		w := newWater(newTestShare())
 		w.dir = (d + 4) % 8 // settle on the opposite side first
 		w.useDir()
 		for range 300 {
@@ -94,7 +96,7 @@ func TestWaterFollowsEveryGravityDirection(t *testing.T) {
 // water's centre sits right of where it sits upright.
 func TestWaterLeansWithASlightTilt(t *testing.T) {
 	centre := func(deg float64) float64 {
-		w := newWater()
+		w := newWater(newTestShare())
 		r := deg * math.Pi / 180
 		w.setTilt(float32(gravity*math.Sin(r)), float32(gravity*math.Cos(r)))
 		for range 400 {
@@ -115,7 +117,7 @@ func TestWaterLeansWithASlightTilt(t *testing.T) {
 func TestStillBadgeLiquidComesToRest(t *testing.T) {
 	r := rand.New(rand.NewPCG(1, 2))
 	for _, deg := range []float64{0, 6, 45} {
-		w := newWater()
+		w := newWater(newTestShare())
 		gx, gy := float32(gravity*math.Sin(deg*math.Pi/180)), float32(gravity*math.Cos(deg*math.Pi/180))
 		noisy := func() {
 			w.setTilt(gx+float32(r.NormFloat64()*0.02), gy+float32(r.NormFloat64()*0.02))
@@ -141,7 +143,7 @@ func TestStillBadgeLiquidComesToRest(t *testing.T) {
 
 // Pouring moves water, it adds none: the stream comes from the surface.
 func TestWaterPourMovesNotAdds(t *testing.T) {
-	w := newWater()
+	w := newWater(newTestShare())
 	n := w.count()
 	w.pour = true
 	for range 100 {
@@ -153,5 +155,37 @@ func TestWaterPourMovesNotAdds(t *testing.T) {
 	_, _, lit := litCentre(w.shade[:], waterW)
 	if lit == 0 {
 		t.Fatal("no water lit while pouring")
+	}
+}
+
+// One engine for Water and Fire's fuel (Leader 2026-11-13): showing Fire
+// takes it and lays the fuel afresh; Water then doesn't step (its tile keeps
+// its last frame) until it takes the engine back.
+func TestLiquidEngineIsShared(t *testing.T) {
+	share := newTestShare()
+	f := newFire(share)
+	w := newWater(share)
+	if !w.active() || f.active() {
+		t.Fatal("at start Water should hold the engine")
+	}
+	w.turn(2) // gravity left: the water runs left
+	for range 50 {
+		w.step()
+	}
+	f.claim()
+	if !f.active() || w.active() {
+		t.Fatal("showing Fire should hand it the engine")
+	}
+	frozen := w.shade
+	for range 50 {
+		w.step()
+		f.step()
+	}
+	if w.shade != frozen {
+		t.Error("Water stepped while Fire held the engine")
+	}
+	w.claim()
+	if !w.active() {
+		t.Fatal("showing Water again should take the engine back")
 	}
 }

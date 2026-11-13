@@ -6,7 +6,7 @@ import (
 	"github.com/itohio/EasyRobot/x/math/fluid/flip"
 )
 
-// fluid is the liquid engine Water runs on: EasyRobot's
+// fluid is the liquid engine Water and Fire's fuel run on: EasyRobot's
 // particle liquid (x/math/fluid/flip, ER-061; owner 2026-11-13: the
 // cellular automaton didn't behave like a liquid). The demos never touch
 // the engine's insides: they set gravity, step it, read a raster of where
@@ -25,13 +25,16 @@ type fluid interface {
 	Reset()
 	// Count is the amount of liquid (particles).
 	Count() int
+	// SetCount sets the amount of liquid, up to the engine's capacity (no
+	// allocation); Reset lays it afresh.
+	SetCount(n int)
 	// Move lifts up to n units of liquid off the surface (the most against
 	// gravity) and drops them at (fx, fy), fractions of the box; it returns
 	// how many moved.
 	Move(n int, fx, fy float32) int
 }
 
-// The engine's box and particle count (Leader 2026-11-13): the
+// The shared engine's box and particle count (Leader 2026-11-13): the
 // largest r4 size that leaves ≥ 20 KB free once the automatons are gone
 // (24×18 cells, the wall ring included, 400 particles: 12.3 KB on TinyGo,
 // fpv-gate). Rastered to the 64×48 LED grids.
@@ -127,6 +130,14 @@ func (f *flipFluid) Raster(dst []uint8, w, h int) {
 func (f *flipFluid) Reset()     { f.l.Reset() }
 func (f *flipFluid) Count() int { return len(f.l.X) }
 
+// SetCount reslices the particles within New's capacity: the engine holds
+// len(X) particles and sized everything else for the capacity.
+func (f *flipFluid) SetCount(n int) {
+	n = min(max(n, 1), cap(f.l.X))
+	f.l.X, f.l.Y = f.l.X[:n], f.l.Y[:n]
+	f.l.VX, f.l.VY = f.l.VX[:n], f.l.VY[:n]
+}
+
 func (f *flipFluid) Move(n int, fx, fy float32) int {
 	n = min(n, liquidMove, len(f.l.X))
 	tx := int32(fx * liquidW * flip.Cell)
@@ -160,6 +171,40 @@ func (f *flipFluid) wasPicked(i, k int) bool {
 	}
 	return false
 }
+
+// liquidShare is the one engine shared by Water and Fire's fuel (Leader
+// 2026-11-13): one liquid demo is active at a time; showing the other
+// claims the engine and lays its liquid afresh. The inactive one doesn't
+// step: its tile keeps its last frame. Each claims the amount it needs
+// (owner 2026-11-13): Water a basin, Fire a thin layer of fuel.
+type liquidShare struct {
+	fl    fluid
+	owner any
+	n     int // the amount of liquid the owner claimed
+}
+
+// The amounts of liquid (particles; the engine holds liquidN).
+const (
+	waterN = liquidN // the Water page and full screen: a basin a third full
+	fireN  = 32      // Fire's fuel: a thin layer on the floor (2 of 48 raster rows, about 4 %; the floor covered)
+)
+
+// claim makes d the engine's user with n units of liquid, re-seeding it
+// if either changed; it reports whether it did.
+func (s *liquidShare) claim(d any, n int) bool {
+	if s.owner == d && s.n == n {
+		return false
+	}
+	s.owner, s.n = d, n
+	s.fl.SetCount(n)
+	s.fl.Reset()
+	return true
+}
+
+var gravityNames = []string{"down", "dn-left", "left", "up-left", "up", "up-right", "right", "dn-right"}
+
+// gravity vector per direction (screen coordinates, y down)
+var gravityVec = [8][2]int{{0, 1}, {-1, 1}, {-1, 0}, {-1, -1}, {0, -1}, {1, -1}, {1, 0}, {1, 1}}
 
 // gravityOf is the unit vector of a lattice direction (gravityVec index),
 // for gravity set by the buttons, at |g| (m/s²).

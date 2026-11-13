@@ -36,9 +36,6 @@ var setupFuncs = map[string]bool{
 	"newMotion": true, "newOrientView": true, "newMotionDemo": true, "App.pageMotion": true,
 	"newCalibration": true, "App.pageCalib": true, // the Calibration page (TG-3), built once
 	"newScope": true, "App.pageScope": true,
-	// step-4 snapshot only: HEAD's liquid engine (the constructor newWater and
-	// newFire call) and package initialisers (run once before main)
-	"newLiquid": true, "<package level>": true,
 	"newBars": true, "newChip": true, "newDurationLabel": true, "newField": true, "newHeading": true, "newHeadingIn": true,
 	"newScrollbar": true, "newSparkline": true, "newSwatch": true, "newTabBar": true, "still": true,
 	"SetUSBSerial": true,
