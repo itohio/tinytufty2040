@@ -512,3 +512,49 @@ func TestPaddleFollowsAHandMoveSmoothly(t *testing.T) {
 		t.Errorf("the paddle moved %.0f px for 1 cm, want %.0f (1:1)", got, want)
 	}
 }
+
+// The boids' window follows a hand move as it happens and the flock stays
+// inside it (owner, TG-5 #3: the boids were "broken completely"): moving
+// the badge up 1 cm in 0.6 s, the window starts within 0.25 s, never jumps
+// more than 2 cells in a frame, keeps (almost) every boid inside, and ends
+// 1:1. Behind the false-start gate the window froze for half a second and
+// then jumped by the whole move in one frame, sweeping its walls through
+// the flock.
+func TestBoidsWindowFollowsAHandMoveSmoothly(t *testing.T) {
+	a, tm := motionApp()
+	b := a.boids
+	const start, frameS = 0.1, 3.0 / imuRate
+	y0, prev := b.pose.baseY, b.pose.baseY
+	firstMove, frames, maxStep, outside, seen := -1.0, 0, int32(0), 0, 0
+	drive(a, tm, 2*imuRate, func(float64) float64 { return 0 }, stroke([3]float64{0, 0, 1}, 0.01, *tm+start, 0.6), func(i int) {
+		if i%3 != 2 {
+			return
+		}
+		b.tick()
+		frames++
+		maxStep = max(maxStep, abs32(b.pose.baseY-prev))
+		prev = b.pose.baseY
+		if firstMove < 0 && b.pose.baseY != y0 {
+			firstMove = float64(frames)*frameS - start
+		}
+		for k := range boidsN[b.count] {
+			seen++
+			dx, dy := b.x[k]-b.pose.cx, b.y[k]-b.pose.cy
+			if dx < -boidsW*boidsFix/2 || dx > boidsW*boidsFix/2 || dy < -boidsH*boidsFix/2 || dy > boidsH*boidsFix/2 {
+				outside++
+			}
+		}
+	})
+	if firstMove < 0 || firstMove > 0.25 {
+		t.Errorf("the window first moved %.2f s into the move, want within 0.25 s", firstMove)
+	}
+	if maxStep > 2*boidsFix {
+		t.Errorf("the window jumped %.1f cells in one frame, want ≤ 2 (a smooth follow)", float64(maxStep)/boidsFix)
+	}
+	if outside*100 > seen {
+		t.Errorf("%d of %d boid-frames outside the window during the move, want ≤ 1 %%", outside, seen)
+	}
+	if got, want := float64(y0-b.pose.baseY)/boidsFix, 0.01*boidsUnitsPerM/boidsFix; got < want*0.85 || got > want*1.15 {
+		t.Errorf("the window moved %.1f cells for 1 cm, want %.1f (1:1)", got, want)
+	}
+}
