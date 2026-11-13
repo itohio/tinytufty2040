@@ -80,8 +80,19 @@ def reboot(pb):
         pass  # the device may reset before acknowledging
 
 
+FLASH_LO, FLASH_HI = 0x10000000, 0x11000000  # the RP2040's XIP flash window (16 MB)
+RP2040_FAMILY = 0xE48BFF56
+
+
 def load_uf2(name):
-    blob = open(name, "rb").read()
+    """The UF2's flash sectors, checked before any USB access: UF2 blocks,
+    RP2040 family (when the file names one), addresses inside flash."""
+    try:
+        blob = open(name, "rb").read()
+    except OSError as e:
+        sys.exit(f"{name}: {e.strerror}")
+    if not blob or len(blob) % 512:
+        sys.exit(f"{name}: not a UF2 file (size {len(blob)})")
     mem = {}
     for off in range(0, len(blob), 512):
         b = blob[off:off + 512]
@@ -90,6 +101,10 @@ def load_uf2(name):
             sys.exit(f"{name}: not a UF2 block at {off}")
         if flags & 1:  # not for flash
             continue
+        if flags & 0x2000 and struct.unpack_from("<I", b, 28)[0] != RP2040_FAMILY:
+            sys.exit(f"{name}: block at {off} is for another chip family")
+        if not (FLASH_LO <= addr and addr + size <= FLASH_HI) or size > 476:
+            sys.exit(f"{name}: block at {off} writes {size} bytes at {addr:#x}, outside the RP2040's flash")
         mem[addr] = b[32:32 + size]
     sectors = {}
     for addr, data in mem.items():
@@ -100,14 +115,21 @@ def load_uf2(name):
 
 
 def main():
+    # arguments and the file are checked before any USB access: --help or a
+    # mistyped path never touches the bootloader (verify TG-1-postcommit R10)
     if len(sys.argv) != 2:
         sys.exit(__doc__)
-    pb = Picoboot()
+    if sys.argv[1] in ("-h", "--help"):
+        print(__doc__)
+        return
     if sys.argv[1] == "--reboot":
-        reboot(pb)
+        reboot(Picoboot())
         print("rebooted")
         return
     sectors = load_uf2(sys.argv[1])
+    if not sectors:
+        sys.exit(f"{sys.argv[1]}: no flash blocks")
+    pb = Picoboot()
     pb.cmd(CMD_EXCLUSIVE, bytes([1]))
     pb.cmd(CMD_EXIT_XIP)
     t0 = time.time()
@@ -124,4 +146,5 @@ def main():
     print("rebooted")
 
 
-main()
+if __name__ == "__main__":
+    main()
