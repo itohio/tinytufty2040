@@ -1,7 +1,9 @@
 //go:build ignore
 
-// Generates pngs.go: four 20×20 PNG icons as string constants for widget.Icon
-// (TinyGUI decodes PNG at draw time with tinygo.org/x/drivers/image/png).
+// Generates pngs.go: four 20×20 icons, drawn, encoded as PNG and decoded
+// again here, stored as RGB565 pixels. The badge doesn't decode PNG: the
+// decoder keeps a 34.8 KB window in RAM, which ran the heap out of memory
+// (the owner's crash on the Image page).
 //
 //	go run gen_pngs.go > pngs.go
 package main
@@ -70,10 +72,24 @@ func main() {
 		if err := png.Encode(&b, img); err != nil {
 			panic(err)
 		}
-		fmt.Fprintf(&out, "const png%s = %q\n\n", ic.name, b.String())
+		pngLen := b.Len()
+		dec, err := png.Decode(&b)
+		if err != nil {
+			panic(err)
+		}
+		fmt.Fprintf(&out, "// %s, from a %d-byte PNG\n", ic.name, pngLen)
+		fmt.Fprintf(&out, "var png%s = []uint16{", ic.name)
+		for py := range size {
+			fmt.Fprint(&out, "\n\t")
+			for px := range size {
+				r, g, bl, _ := dec.At(px, py).RGBA()
+				fmt.Fprintf(&out, "0x%04x, ", uint16(r>>8&0xF8)<<8|uint16(g>>8&0xFC)<<3|uint16(bl>>8)>>3)
+			}
+		}
+		fmt.Fprint(&out, "\n}\n\n")
 		names = append(names, "png"+ic.name)
 	}
-	fmt.Fprintln(&out, "var pngIcons = []string{")
+	fmt.Fprintln(&out, "var pngPix = [][]uint16{")
 	for _, n := range names {
 		fmt.Fprintf(&out, "\t%s,\n", n)
 	}

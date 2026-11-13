@@ -100,7 +100,7 @@ type App struct {
 	level, gain            float32
 	mix                    []float32
 	accent                 int
-	pngIdx, pngChoiceIdx   int
+	pngIdx                 int
 	bitmapIdx              int
 	menu                   *menu
 	solid                  int // grey level of a uniform test screen, -1: off

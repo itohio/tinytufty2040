@@ -43,7 +43,7 @@ Confirmed on the device: orientation (MADCTL `0xB0`; the badge cam itself mirror
 | Dash | `Label` with zero-allocation text providers, `VolumeGauge`, `SolidGauge`, custom sparkline (ring buffer) and bar chart widgets, `HList`/`VList` nesting, `Selectable` to skip static rows |
 | Gauge | `Gauge` vertical and horizontal, `MultiGauge`, `VolumeGauge`, four `animation` curves (linear, ease-in, ease-out, ease-in-out) ping-ponging, `InteractiveGauge`, `InteractiveMultiGauge`, `InteractiveLabel[int]` with commit callback restarting the animations |
 | Ctrl | `Toggle` (drives the user LED), `InteractiveLabel[int]`/`[float32]` with formatters (LED level, backlight, gain), `InteractiveLabelChoice` (accent colour recolours the UI), example `durationLabel` using `ui.DurationAdd/Sub`, `MultilineLabel` |
-| Image | `InteractiveIcon` and `InteractiveIconChoice` (PNG strings decoded by `ui.DrawPng`), `InteractiveWidgetChoice` over `Bitmap16` icons, animated `Bitmap16` plasma, `Bitmap8` (RGB332), `Separator` |
+| Image | four PNG icons decoded at build time (`gen_pngs.go` → `pngs.go`, RGB565: no PNG decoder on the badge) as `Bitmap16` in an `InteractiveWidgetChoice`, `InteractiveWidgetChoice` over `Bitmap16` icons, animated `Bitmap16` plasma, `Bitmap8` (RGB332), `Separator` |
 | Flow | `Grid`, `HFlow`, `VFlow`, `HList` side by side |
 | List | `ScrollChoice` with 20 rows, `ScrollObserver` scrollbar, navigator descent (A enters, B leaves) |
 | Log | `InteractiveLog` fed by `NavigatorObserver`, button and serial events; navigator depth and `Walk` node count |

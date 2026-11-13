@@ -180,11 +180,14 @@ func (a *App) pageControls() *page {
 	)
 }
 
-// Pictures: PNG icons, RGB565 and RGB332 bitmaps, an animated bitmap.
+// Pictures: icons (PNG decoded at build time, gen_pngs.go), RGB565 and
+// RGB332 bitmaps, an animated bitmap.
 func (a *App) pagePictures() *page {
-	icon := widget.NewInteractiveIcon(pngSize, pngSize, pngIcons, widget.WithIconIndex(&a.pngIdx),
-		widget.WithIconChange(func(i int) { a.log("icon " + pngNames[i]) }))
-	iconChoice := widget.NewInteractiveIconChoice(pngSize, pngSize, pngIcons, widget.WithIconChoiceIndex(&a.pngChoiceIdx))
+	pngs := make([]ui.Widget, len(pngPix))
+	for i, pix := range pngPix {
+		pngs[i] = widget.NewBitmap16(pngSize, pngSize, pix)
+	}
+	png := widget.NewInteractiveWidgetChoice[ui.Widget](pngSize+4, pngSize, pngs, widget.WithWidgetChoiceIndex[ui.Widget](&a.pngIdx))
 	bitmaps := []ui.Widget{
 		widget.NewBitmap16(icons.AquariumWidth, icons.AquariumHeight, icons.AquariumPng),
 		widget.NewBitmap16(icons.FilterWidth, icons.FilterHeight, icons.FilterPng),
@@ -203,8 +206,7 @@ func (a *App) pagePictures() *page {
 			widget.NewSeparator(100, 9, colMuted), widget.NewSeparator(100, 9, colGood)),
 	)
 	return a.newPage("Image",
-		newField("InteractiveIcon", 100, innerW, icon),
-		newField("IconChoice", 100, innerW, iconChoice),
+		newField("PNG icons", 100, innerW, png),
 		newField("WidgetChoice", 100, innerW, pick),
 		still(strip),
 	)
