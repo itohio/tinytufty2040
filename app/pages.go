@@ -65,7 +65,7 @@ func (a *App) pageDashboard() *page {
 	}, &colAccent)
 	readouts := box(170, 35, layout.VList(1),
 		a.text(170, func() string {
-			return a.txtLight.reset().str("Light ").int(int(a.light)).str(" %  raw ").int(int(a.lightRaw)).String()
+			return a.txtLight.reset().str("Light ").int(a.lightShown).str(" %  raw ").int(int(a.lightFilt.med)).String()
 		}, colFG),
 		a.text(170, func() string {
 			t := a.txtBatt.reset().str("Battery ").fixed(a.vbat, 2).str(" V")

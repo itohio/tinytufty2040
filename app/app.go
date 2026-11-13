@@ -90,6 +90,8 @@ type App struct {
 	start, now, lastSample time.Time
 	light, battPct, vbat   float32
 	lightRaw               uint16
+	lightFilt              lightFilter // median, log scale, EMA (light.go)
+	lightShown             int         // the readout: light %, moving by whole steps
 	usb                    bool
 	presses                [6]int
 	ledOn                  bool
@@ -234,7 +236,8 @@ func (a *App) Update(now time.Time) {
 	if now.Sub(a.lastSample) >= a.samplePeriod {
 		a.lastSample = now
 		a.lightRaw = a.hw.Light()
-		a.light = float32(a.lightRaw) * 100 / 65535
+		a.light = a.lightFilt.add(a.lightRaw)
+		a.lightShown = steadyPct(a.lightShown, a.light)
 		a.vbat, a.usb = a.hw.Battery()
 		a.battPct = clampf((a.vbat-3.0)/(4.2-3.0)*100, 0, 100)
 		a.spark.Push(a.light)
