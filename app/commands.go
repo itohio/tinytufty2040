@@ -191,6 +191,6 @@ func (a *App) motionReport() {
 	a.log(a.txtStat.reset().str("rest ").int(rest).str("% of ").int(m.sampleN).str(" settled ").int(btoi(m.settled)).
 		str(" pad ").int(int(a.pong.pad[0] / (pongFix / 5))).
 		str(" win ").int(int((b.pose.baseX - boidsW*boidsFix/2) * 10 / boidsFix)).str(" ").int(int((b.pose.baseY - boidsH*boidsFix/2) * 10 / boidsFix)).
-		str(" false ").int(m.falseN).str(" moves ").int(m.movesN).String())
-	m.sampleN, m.restN, m.falseN, m.movesN = 0, 0, 0, 0
+		str(" moves ").int(m.movesN).String())
+	m.sampleN, m.restN, m.movesN = 0, 0, 0
 }

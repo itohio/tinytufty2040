@@ -78,11 +78,8 @@ type motion struct {
 	disp      [3]float32 // m, badge axes (+X right, +Y up the screen, +Z out of it)
 	force     [3]float32 // m/s², badge axes, low-passed (forceTau)
 	lastP     [3]float32 // nav.P at the previous sample
-	pend      [3]float32 // this moving episode's steps, until it passes dispMin and dispMinT
-	pendT     float32    // this moving episode's length so far (s)
-	falseN    int        // episodes dropped short of the gate since the last motion report
-	movesN    int        // … and counted
-	live      bool       // this moving episode passed dispMin: steps go straight to disp
+	movesN    int        // the strapdown's moving episodes since the last motion report
+	wasStill  bool       // the last sample was at rest (an episode starts when it leaves rest)
 	gatedFor  float32    // s in a row the filter ran on the gyro alone
 	settleFor float32    // s in a row the attitude has explained the accelerometer at rest
 	settled   bool       // the filter has agreed with the accelerometer at rest once
@@ -149,7 +146,7 @@ func (a *App) SetIMU(acc, gyro [3]float32, dt float32) {
 	// the world step since the last sample, turned into the badge's axes
 	d := [3]float32{m.nav.P[0] - m.lastP[0], m.nav.P[1] - m.lastP[1], m.nav.P[2] - m.lastP[2]}
 	m.lastP = m.nav.P
-	m.addStep(toBadge(q, d), m.nav.Still, dt)
+	m.addStep(toBadge(q, d), m.nav.Still)
 	k := dt / (forceTau + dt)
 	for i := range acc {
 		m.force[i] += (acc[i] - m.force[i]) * k
@@ -323,54 +320,18 @@ func (m *motion) learnBias(acc, gyro [3]float32) {
 	}
 }
 
-// A moving episode (from rest to rest) reaches the badge-frame displacement
-// only once it has gone dispMin (m) and lasted dispMinT (s). At rest, on the
-// badge's sensor noise, the strapdown now and then calls the badge moving
-// for 0.30 s, the time it takes to see rest again, and integrates 2–5 mm in
-// that time (host model at the badge's noise, matching its 94–97 % rest;
-// verify2 @1414: the paddle moved 17 px, 2.2 mm, in 30 s); a deliberate move
-// lasts longer.
-const (
-	dispMin  = 0.0015
-	dispMinT = 0.45
-)
-
-// addStep adds one sample's step (m, badge axes, dt s) to the badge-frame
-// displacement: within a moving episode it waits in pend until the episode
-// passes dispMin and dispMinT, then all of it counts and the rest goes straight in (a
-// real move stays 1:1); an episode that ends in rest short of dispMin is
-// dropped. At rest only the first step after a counted move goes in: the
-// strapdown's correction as it detects rest belongs to that move; any
-// other step at rest is creep (its position wanders by millimetres at rest
-// on the badge's sensor noise, under the Motion page's 1 cm readout).
-func (m *motion) addStep(b [3]float32, still bool, dt float32) {
-	if still {
-		switch {
-		case m.live:
-			for i := range b {
-				m.disp[i] += b[i]
-			}
-			m.movesN++
-		case m.pendT > 0:
-			m.falseN++ // a false start: dropped
-		}
-		m.pend, m.pendT, m.live = [3]float32{}, 0, false
-		return
+// addStep adds one sample's step (m, badge axes) to the badge-frame
+// displacement and counts the strapdown's moving episodes (the console's
+// motion readout). No gate: strapdown r10 doesn't start a move on sensor
+// noise at rest (r3 did, 0.3 s at a time, which a gate had to hold back,
+// and the gate froze the paddle for half a second, then jumped it: owner,
+// TG-5 #2).
+func (m *motion) addStep(b [3]float32, still bool) {
+	if !still && m.wasStill {
+		m.movesN++
 	}
-	if m.live {
-		for i := range b {
-			m.disp[i] += b[i]
-		}
-		return
-	}
+	m.wasStill = still
 	for i := range b {
-		m.pend[i] += b[i]
-	}
-	m.pendT += dt
-	if p := m.pend; m.pendT >= dispMinT && p[0]*p[0]+p[1]*p[1]+p[2]*p[2] >= dispMin*dispMin {
-		for i := range p {
-			m.disp[i] += p[i]
-		}
-		m.pend, m.live = [3]float32{}, true
+		m.disp[i] += b[i]
 	}
 }

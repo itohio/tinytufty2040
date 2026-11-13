@@ -413,33 +413,6 @@ func TestStillBadgeRightAfterBootKeepsPaddleAndWindowStill(t *testing.T) {
 	}
 }
 
-// The paddle and the boids' window ignore the strapdown's brief false
-// starts at rest (verify2 @1225: the paddle crept 7 px, about 0.9 mm, per
-// 30 s; the badge's `motion` readout showed the window moving only while
-// the strapdown briefly called the badge moving), yet follow a real move
-// 1:1: an episode between rests reaches them once it passes dispMin, and
-// then all of it.
-func TestBadgeFrameDisplacementSkipsFalseStarts(t *testing.T) {
-	m := newMotion()
-	step := func(dy float32, still bool) { m.addStep([3]float32{0, dy, 0}, still, 1.0/imuRate) }
-	for range 20 { // twenty false starts of 0.8 mm, each ending in rest
-		for range 8 {
-			step(0.0001, false)
-		}
-		step(0, true)
-	}
-	if m.disp[1] != 0 || m.falseN != 20 || m.movesN != 0 {
-		t.Fatalf("false starts moved the displacement %.2f mm (counted %d false, %d moves), want 0 (20, 0)", m.disp[1]*1000, m.falseN, m.movesN)
-	}
-	for range 1000 { // a real 10 cm move, then rest
-		step(0.0001, false)
-	}
-	step(0, true)
-	if d := m.disp[1]; d < 0.0999 || d > 0.1001 || m.movesN != 1 {
-		t.Fatalf("a 10 cm move gave %.2f mm (%d moves counted), want 100 (1:1) and 1 move", d*1000, m.movesN)
-	}
-}
-
 // With the badge's own sensor noise the strapdown now and then leaves rest
 // for a moment (verify2 @1414: rest 97 %, the paddle moved 17 px, 2.2 mm,
 // in 30 s on a still badge). At accelerometer noise 0.04 m/s² and gyro
@@ -500,5 +473,42 @@ func TestQuickStrokesRegister(t *testing.T) {
 				t.Errorf("%.0f cm in %.1f s: displacement %.1f cm, want %.0f (1:1)", d*100, T, got*100, d*100)
 			}
 		}
+	}
+}
+
+// The paddle follows a hand move as it happens (owner, TG-5 #2: "not
+// responding (jumps around)"): moving the badge up 1 cm in 0.6 s, the
+// paddle starts within 0.25 s, never jumps more than 25 px in a frame, and
+// ends 1:1. The false-start gate (an episode counted only after 1.5 mm and
+// 0.45 s) held it still for half a second and then jumped it 78 px at once.
+func TestPaddleFollowsAHandMoveSmoothly(t *testing.T) {
+	a, tm := motionApp()
+	p := a.pong
+	p.showFull()
+	p.fullPress(BtnA) // paused: only the badge moves the paddle
+	const start, frameS = 0.1, 3.0 / imuRate
+	pad0, prev := p.pad[0], p.pad[0]
+	firstMove, frames, maxStep := -1.0, 0, int32(0)
+	drive(a, tm, 2*imuRate, func(float64) float64 { return 0 }, stroke([3]float64{0, 0, 1}, 0.01, *tm+start, 0.6), func(i int) {
+		if i%3 != 2 {
+			return
+		}
+		p.tick()
+		frames++
+		maxStep = max(maxStep, abs32(p.pad[0]-prev))
+		prev = p.pad[0]
+		if firstMove < 0 && p.pad[0] != pad0 {
+			firstMove = float64(frames)*frameS - start
+		}
+	})
+	const px = pongFix / 5
+	if firstMove < 0 || firstMove > 0.25 {
+		t.Errorf("the paddle first moved %.2f s into the move, want within 0.25 s", firstMove)
+	}
+	if maxStep > 25*px {
+		t.Errorf("the paddle jumped %d px in one frame, want ≤ 25 (a smooth follow)", maxStep/px)
+	}
+	if got, want := float64(pad0-p.pad[0])/px, 0.01*pongCellsPerM*5; got < want*0.85 || got > want*1.15 {
+		t.Errorf("the paddle moved %.0f px for 1 cm, want %.0f (1:1)", got, want)
 	}
 }
