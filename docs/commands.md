@@ -35,7 +35,8 @@ Same meaning on every page (owner 2026-11-12: "up and down … A, B, and C … s
 | `led <0-100>` | user LED brightness (0 = off) | — (Ctrl page: User LED, LED level) | |
 | `bl <10-100>` | backlight brightness; **100 is DC** (pin driven high, no PWM: no stripes in camera photos), below 100 a 200 kHz PWM; the default is 100 on USB power, 80 on battery | — (Ctrl page: Backlight) | |
 | `saver` / `saver 1` / `saver 0` | toggle / switch on / switch off the screensaver (`RandomContext` burn-in shift) | USER hold > 1 s toggles | any button press leaves it |
-| `stats` | log `fps`, `draw_us`, `push_us`, page, edit state; `heap_alloc`, `heap_sys`, `mallocs`, `gc` | — | |
+| `stats` | log `build <ID>`; `fps`, `draw_us`, `push_us`, page, edit state; `heap_alloc`, `heap_sys`, `mallocs`, `gc` | — | |
+| `version` | log `build <ID>`: the firmware's build ID, `<tinytufty2040 commit>[+]/<tinygui commit>[+]@<MMDD-HHMM>` (`+`: uncommitted changes), set by `tools/build` | — | |
 | `solid [0-255]` | the whole screen one grey level (255 white) for camera tests; no argument returns to the UI | — | |
 | `tiles` | frame budget of each Demos tile: `tile <name> tick_us <µs> draw_us <µs>` (draw summed over the three bands) | — | |
 | `dump` | send the framebuffer: line `FB 320 240`, 153 600 bytes big-endian RGB565 (both bands), line `END` | — | what was drawn, not what the glass shows |

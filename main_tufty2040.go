@@ -30,6 +30,11 @@ const bandRows = app.ScreenH / 3
 
 var pixels [app.ScreenW * bandRows]uint16
 
+// buildID names this firmware; tools/build sets it (-ldflags -X main.buildID=…)
+// to <tinytufty2040 commit>[+]/<tinygui commit>[+]@<MMDD-HHMM>, + marking
+// uncommitted changes.
+var buildID = "unknown"
+
 const frameTime = 33 * time.Millisecond
 
 func main() {
@@ -56,6 +61,7 @@ func main() {
 		DurationAdd: ui.DurationAdd,
 		DurationSub: ui.DurationSub,
 		Log:         func(s string) { println(s) },
+		BuildID:     buildID,
 	}, time.Now())
 	boot("app")
 	reportIMU()

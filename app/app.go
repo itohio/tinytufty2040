@@ -32,6 +32,9 @@ type Config struct {
 	DurationAdd, DurationSub func(d, delta time.Duration) time.Duration
 	// Log mirrors log lines, e.g. to the USB serial console. May be nil.
 	Log func(line string)
+	// BuildID names the firmware (git commits, dirty flag, build time):
+	// `version` and `stats` report it (tools/build sets it).
+	BuildID string
 }
 
 // Button is a physical badge button.
@@ -323,13 +326,15 @@ func (a *App) footerText() string {
 	case a.saver:
 		t.str("screensaver - any key")
 	case a.overlay.Top() != nil:
-		t.str("up/down choose  A ok  B cancel")
+		t.str("up/dn choose  A ok  B cancel")
 	case a.editing:
-		t.str("EDIT  up/down change  A ok  B cancel")
+		t.str("EDIT up/dn  A ok  B cancel")
 	default:
-		t.str("up/down focus  A select  B back  C page")
+		t.str("up/dn focus  A ok  B back  C page")
 	}
-	t.str("   ").int(a.fps).str(" fps")
+	// heartbeat: seconds since boot (a frozen number means a stuck badge);
+	// the hints are short so it fits the 48-byte footer text
+	t.str("  ").int(a.fps).str("fps ").int(int(a.now.Sub(a.start) / time.Second)).str("s")
 	return t.String()
 }
 

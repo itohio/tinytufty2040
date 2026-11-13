@@ -16,12 +16,12 @@ type command struct {
 	long   bool
 }
 
-const helpText = "commands: up|down|a|b|c [long], user <ms>, page <n>, led <0-100>, bl <10-100>, saver [0|1], solid [0-255], stats, tiles, dump, help"
+const helpText = "commands: up|down|a|b|c [long], user <ms>, page <n>, led <0-100>, bl <10-100>, saver [0|1], solid [0-255], stats, tiles, dump, version, help"
 
 // Handlers returns the command table for ui.NewCommandStreamMux.
 func (a *App) Handlers() map[string]func([]byte) {
 	m := map[string]func([]byte){}
-	for _, name := range []string{"up", "down", "a", "b", "c", "user", "page", "led", "bl", "saver", "solid", "stats", "tiles", "dump", "help"} {
+	for _, name := range []string{"up", "down", "a", "b", "c", "user", "page", "led", "bl", "saver", "solid", "stats", "tiles", "dump", "version", "help"} {
 		m[name] = func(arg []byte) { a.Command(name, string(arg)) }
 	}
 	return m
@@ -77,12 +77,15 @@ func (a *App) exec(c command) {
 	case "stats":
 		var ms runtime.MemStats
 		runtime.ReadMemStats(&ms)
+		a.log("build " + a.cfg.BuildID)
 		a.log("fps " + itoa(a.fps) + " draw_us " + itoa(int(a.drawUS)) + " push_us " + itoa(int(a.pushUS)) +
 			" page " + itoa(a.cur) + " edit " + itoa(btoi(a.editing)))
 		a.log("heap_alloc " + itoa(int(ms.HeapAlloc)) + " heap_sys " + itoa(int(ms.HeapSys)) +
 			" mallocs " + itoa(int(ms.Mallocs)) + " gc " + itoa(int(ms.NumGC)))
 	case "tiles": // frame budget of each demo tile on the Demos page
 		a.menu.report(a.log)
+	case "version": // the firmware's build ID (tools/build)
+		a.log("build " + a.cfg.BuildID)
 	case "help":
 		a.log(helpText)
 	}
