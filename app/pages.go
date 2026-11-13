@@ -107,6 +107,7 @@ func (a *App) pageGauges() *page {
 	}
 	a.hGauge = widget.NewGauge[float32](150, 10, &a.curves[3], 0, 100, colAccent, colTrack)
 	a.multi = widget.NewMultiGauge[float32](150, 10, 0, 100, &a.mix, []color.RGBA{colBad, colGood, accents[0]}, colTrack, colFG)
+	a.multi.Shares = true // the mix as percentages of its total: always inside the bar (owner 2026-11-13)
 	right := box(160, 84, layout.VList(3),
 		a.caption(160, "Gauge (ease i/o)"), a.hGauge,
 		a.caption(160, "MultiGauge (mix)"), a.multi,
@@ -121,6 +122,7 @@ func (a *App) pageGauges() *page {
 		widget.WithCommit(func(v float32) { a.logf("level", int(v)) }))
 	mix := widget.NewInteractiveMultiGauge[float32](valueW, 10,
 		widget.WithValues(&a.mix), widget.WithRange[float32](0, 100), widget.WithSteps[float32](2, 10),
+		widget.WithShares[float32](),
 		widget.WithSegmentColors[float32]([]color.RGBA{colBad, colGood, accents[0]}),
 		widget.WithBackground[float32](colTrack),
 		widget.WithMultiCommit(func([]float32) { a.log("mix committed") }))
