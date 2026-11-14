@@ -10,7 +10,12 @@ import "time"
 type frameProfile struct {
 	n, samples                           int
 	period, imu, bus, update, draw, push int64 // µs, summed
+	imuErrs, imuOvf                      int   // since boot (kept across windows)
 }
+
+// ReportIMUFaults hands over the drain's I2C errors and FIFO overflow
+// restarts since boot.
+func (a *App) ReportIMUFaults(errs, ovf int) { a.prof.imuErrs, a.prof.imuOvf = errs, ovf }
 
 // ReportProfile adds one frame: its period (start to start), the IMU drain
 // with its time on the I2C bus and the samples it fed, Update (the demos'
@@ -36,7 +41,7 @@ func (a *App) profileReport() {
 	}
 	n := int64(p.n)
 	other := p.period - p.imu - p.update - p.draw - p.push
-	// three lines: the log truncates at logLineLen (56)
+	// four lines: the log truncates at logLineLen (56)
 	a.log(a.txtStat.reset().str("prof period_us ").int(int(p.period / n)).str(" imu_us ").int(int(p.imu / n)).
 		str(" update_us ").int(int(p.update / n)).String())
 	a.log(a.txtStat.reset().str("prof draw_us ").int(int(p.draw / n)).str(" push_us ").int(int(p.push / n)).
@@ -47,5 +52,7 @@ func (a *App) profileReport() {
 		a.log(a.txtStat.reset().str("prof imu samples ").int(p.samples).str(" bus_us ").int(int(p.bus / s)).
 			str(" maths_us ").int(int((p.imu - p.bus) / s)).String())
 	}
-	*p = frameProfile{}
+	a.log(a.txtStat.reset().str("prof imu err ").int(p.imuErrs).str(" ovf ").int(p.imuOvf).str(" since boot").String())
+	errs, ovf := p.imuErrs, p.imuOvf
+	*p = frameProfile{imuErrs: errs, imuOvf: ovf}
 }

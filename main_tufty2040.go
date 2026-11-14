@@ -163,6 +163,7 @@ func main() {
 			}
 			a.ReportTiming(draw, push)
 			a.ReportProfile(period, tIMU.Sub(now), bus, samples, tUpd.Sub(tIMU), draw, push)
+			a.ReportIMUFaults(imuErrs, imuOvf)
 			a.ReportFrame(time.Since(now))
 			a.ReportAllocs(int(m1-m0), int(md), int(mp))
 			if dumping {

@@ -177,14 +177,24 @@ func imuDrain(a *app.App) (bus time.Duration, samples int) {
 	return bus, samples
 }
 
+// imuErrs and imuOvf count the drain's I2C errors and FIFO overflow
+// restarts since boot (stats: prof imu err … ovf …): both stay 0 while the
+// bus is shared safely and the loop keeps up.
+var imuErrs, imuOvf int
+
 func imuDrainLocked(a *app.App) (bus time.Duration, samples int) {
 	t0 := time.Now()
 	var st [1]byte
-	if mpuRead(regIntStatus, st[:]) == nil && st[0]&0x10 != 0 {
+	switch err := mpuRead(regIntStatus, st[:]); {
+	case err != nil:
+		imuErrs++ // read the count anyway
+	case st[0]&0x10 != 0:
+		imuOvf++
 		_ = fifoStart()
 		return time.Since(t0), 0
 	}
 	if mpuRead(regFIFOCount, fifoCnt[:]) != nil {
+		imuErrs++
 		return time.Since(t0), 0
 	}
 	bus = time.Since(t0)
@@ -197,6 +207,7 @@ func imuDrainLocked(a *app.App) (bus time.Duration, samples int) {
 		err := mpuRead(regFIFORW, fifoR[:k*fifoSample])
 		bus += time.Since(t1)
 		if err != nil {
+			imuErrs++
 			return bus, samples
 		}
 		for i := range k {
