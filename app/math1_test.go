@@ -187,3 +187,73 @@ func TestSettlingIsShown(t *testing.T) {
 		t.Fatalf("after it started: footer notice %v, %d notice pixels on PLAY; want neither", f, n)
 	}
 }
+
+// longModeInput is the double integral, over a 10 cm / 1 s stroke and 0.5 s after, of the world acceleration
+// the app's long mode integrates (R(q)·f − gRest ẑ, with the app's live q and gRest), along world axis k.
+func longModeInput(t *testing.T, badgeAxis, k int) float64 {
+	const d, T = 0.10, 1.0
+	r := newRig()
+	s := newSensor(7, 0.03, 0.002, 0, 0)
+	for range 13 * imuRate {
+		a, g := s.sample([3]float64{})
+		r.feed(a, g, 0.01)
+	}
+	m := r.a.motion
+	var v, p float64
+	n := int(T * imuRate)
+	for i := range n + imuRate/2 {
+		var w [3]float64
+		if i < n {
+			u := (float64(i) + 0.5) / float64(n)
+			w[badgeAxis] = d / (T * T) * (60*u - 180*u*u + 120*u*u*u)
+		}
+		a, g := s.sample(w)
+		r.feed(a, g, 0.01)
+		aw := toWorld(m.ahrs.Output(), a)
+		x := float64(aw[k])
+		if k == 2 {
+			x -= float64(m.gRest)
+		}
+		v += x * 0.01
+		p += v * 0.01
+	}
+	return p
+}
+
+// A4 (app): a gentle vertical move is not taken for rest: gRest (the app's g, learnt while its rest test
+// passes: |f| within 0.6 m/s² of g, gyro < 0.05 rad/s) must not follow it, or long mode subtracts the move.
+func TestMath1GRestKeepsVerticalMotion(t *testing.T) {
+	if p := longModeInput(t, 1, 2); p < 0.085 {
+		t.Errorf("10 cm up in 1 s: R·f − gRest integrates to %.1f cm (want ≥ 8.5): gRest followed the move", p*100)
+	}
+}
+
+// A4 (app), the band: learnBias's rest band is centred on the nominal g (9.80665), not on the badge's |f| at rest,
+// so during a shake it admits more upward than downward samples and gRest climbs; R·f − gRest then pushes the
+// shown position down. A 50 mm, 1 Hz shake: the shown centre over 4–6 s within 15 mm of 3b's own (the anchor).
+func TestMath1ShakeKeepsItsCentre(t *testing.T) {
+	const A, w = 0.025, 2 * math.Pi
+	r := newRig()
+	r.frameN = 3
+	s := newSensor(7, 0.03, 0.002, 0, 0)
+	for range 13 * imuRate {
+		a, g := s.sample([3]float64{})
+		r.feed(a, g, 0.01)
+	}
+	m := r.a.motion
+	d0, g0 := m.disp[1], m.gRest
+	var sum float64
+	n := 0
+	for i := range 6 * imuRate {
+		tt := float64(i+1) * 0.01
+		a, g := s.sample([3]float64{0, A * w * w * math.Cos(w*(tt-0.005)), 0})
+		r.feed(a, g, 0.01)
+		if tt > 4 {
+			sum += float64(m.disp[1] - d0)
+			n++
+		}
+	}
+	if c := sum / float64(n); math.Abs(c) > 0.015 {
+		t.Errorf("50 mm 1 Hz shake: shown centre %.1f mm (want within 15 mm of the anchor); gRest %.3f → %.3f m/s²", c*1000, g0, m.gRest)
+	}
+}

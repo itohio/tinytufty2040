@@ -386,7 +386,14 @@ func wrapPi(a float32) float32 {
 // the first restFirst resting samples, then a slow follow.
 func (m *motion) learnBias(acc, gyro [3]float32) {
 	an := float32(math.Sqrt(float64(acc[0]*acc[0] + acc[1]*acc[1] + acc[2]*acc[2])))
-	m.resting = an > gravity-restAccel && an < gravity+restAccel
+	// the band is centred on gravity as this accelerometer reads it once
+	// learnt (this badge: 9.73, not 9.81): centred on 9.80665 it let in
+	// −0.52..+0.68 m/s², and gRest crept up (MATH-1 A4)
+	g := float32(gravity)
+	if m.biasN >= restFirst {
+		g = m.gRest
+	}
+	m.resting = an > g-restAccel && an < g+restAccel
 	for i := range gyro {
 		if d := gyro[i] - m.bias[i]; d > restGyro || d < -restGyro {
 			if m.biasN >= restFirst { // a learnt bias: this is motion
@@ -410,7 +417,14 @@ func (m *motion) learnBias(acc, gyro [3]float32) {
 	for i := range gyro {
 		m.bias[i] += (gyro[i] - m.bias[i]) * biasRate
 	}
-	m.gRest += (an - m.gRest) * biasRate
+	// gravity as this accelerometer reads it: only while the strapdown calls
+	// the badge still (its test is 0.2 m/s² over 0.3 s). The app's rest test
+	// (|f| within 0.6 of g) passes through a gentle vertical stroke, and
+	// gRest learnt it as gravity: long mode then integrated nothing (MATH-1
+	// A4: 10 cm up in 1 s read −0.1 cm)
+	if m.nav.Still {
+		m.gRest += (an - m.gRest) * biasRate
+	}
 }
 
 // addStep adds one sample's step (m, badge axes) to the badge-frame
