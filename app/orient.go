@@ -87,7 +87,8 @@ func (p *pathTrack) reset() {
 
 type pathView struct {
 	ui.WidgetBase
-	t *pathTrack
+	t    *pathTrack
+	full bool // the full-screen view: it shows the settling notice
 	// this frame's camera (set by Draw; fields, not a closure: no
 	// allocation): the attitude, the camera's world position, the view's
 	// centre on screen, the focal length in pixels and the view's rectangle
@@ -145,6 +146,9 @@ func (v *pathView) Draw(ctx ui.Context) {
 	w, h := int16(v.Width), int16(v.Height)
 	fillRect(d, x0, y0, w, h, boidsViewBG)
 	t := v.t
+	if v.full {
+		drawSettling(d, t.m, x0, y0, w, h)
+	}
 	back := v.back()
 	v.setCamera(back)
 	v.ox, v.oy = x0+w/2, y0+h/2
@@ -266,7 +270,7 @@ type motionDemo struct {
 func newMotionDemo(m *motion) *motionDemo {
 	md := &motionDemo{track: pathTrack{m: m}}
 	md.page = &pathView{WidgetBase: ui.NewWidgetBase(192, 144), t: &md.track}
-	md.full = &pathView{WidgetBase: ui.NewWidgetBase(ScreenW, ScreenH), t: &md.track}
+	md.full = &pathView{WidgetBase: ui.NewWidgetBase(ScreenW, ScreenH), t: &md.track, full: true}
 	return md
 }
 
@@ -320,6 +324,9 @@ func (a *App) pageMotion() *page {
 		still(a.text(104, func() string { return m.txt[2].reset().str("yaw ").int(deg(m.rpy[2])).String() }, colMuted)),
 		still(a.text(104, func() string {
 			t := m.txt[4].reset()
+			if m.settling() {
+				return t.str("settling").String()
+			}
 			if m.nav.Still {
 				return t.str("at rest").String()
 			}

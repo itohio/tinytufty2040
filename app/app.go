@@ -207,6 +207,8 @@ func (a *App) initDemos(cfg Config) {
 		a.motion = newMotion()
 		a.motionDemo = newMotionDemo(a.motion)
 		a.pong.motion = a.motion // your paddle follows the badge up and down
+		// the boids' full view shows the settling notice
+		a.boids.motion = a.motion
 		a.calib = newCalibration(newCalibAdapter())
 	}
 }
@@ -435,6 +437,8 @@ func (a *App) footerText() string {
 		t.str("up/dn choose  A ok  B cancel")
 	case a.editing:
 		t.str("EDIT up/dn  A ok  B cancel")
+	case a.motion.settling():
+		t.str(settlingText)
 	default:
 		t.str("up/dn focus  A ok  B back  C page")
 	}

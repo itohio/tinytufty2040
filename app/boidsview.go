@@ -31,6 +31,9 @@ func (v *boidsView) Draw(ctx ui.Context) {
 	w, h := int32(v.Width), int16(v.Height)
 	fillRect(d, x0, y0, int16(w), h, boidsViewBG)
 	b := v.b
+	if v == b.full {
+		drawSettling(d, b.motion, x0, y0, int16(w), h)
+	}
 	const span = boidsW * boidsFix // world units across the box; pixels = units·w/span on both axes
 	n := boidsN[b.count]
 	for k := 1; k < boidsHist; k++ { // trails, oldest dimmest

@@ -25,16 +25,19 @@ const (
 	biasRate  = 0.02 // then the bias follows the resting gyro this fast
 	gravity   = 9.80665
 	// the filter has settled once the world acceleration (gravity off, by
-	// its attitude) is below settleAccel at rest
-	settleAccel = 0.1 // m/s² across gravity (0.6°), on the low-passed force: under the strapdown's 0.2 rest threshold
+	// its attitude) is below settleAccel, on the force averaged over
+	// settleTau: a still hand's tremor (0.06–0.12 m/s², MATH-1) is
+	// zero-mean and averages out, a real motion doesn't
+	settleAccel = 0.15 // m/s² across gravity (0.88°): under the strapdown's 0.2 rest threshold
+	settleTau   = 1.0  // s
 	// the specific force the demos feel is low-passed over forceTau (s):
 	// sensor noise off, a shake (a few Hz) kept
 	forceTau = 0.03
-	// the filter has settled when the attitude points along the
+	// the filter has settled when the attitude points along the averaged
 	// accelerometer (within settleAccel across gravity: its direction, not
-	// its size) for settleTime in a row at rest: the strapdown learns
-	// its bias then (0.3 m/s² left it 0.09 off; under 0.2 it re-learns at
-	// later rests)
+	// its size) for settleTime in a row, once the gyro bias is learnt: the
+	// strapdown learns its bias then (0.3 m/s² left it 0.09 off; under 0.2
+	// it re-learns at later rests)
 	settleTime = 0.5 // s
 	// the filter's gain: high until it settles (it starts flat and has to
 	// turn to the badge's pose: 0.1 s instead of 0.5 s per e-fold), then the
@@ -85,7 +88,9 @@ type motion struct {
 	lastPos   [3]float32 // pos at the previous sample
 	movesN    int        // the strapdown's moving episodes since the last motion report
 	wasStill  bool       // the last sample was at rest (an episode starts when it leaves rest)
-	settleFor float32    // s in a row the attitude has explained the accelerometer at rest
+	settleFor float32    // s in a row the attitude has explained the averaged accelerometer
+	fSettle   [3]float32 // the force averaged over settleTau for the settle test (badge axes)
+	fSeeded   bool       // fSettle holds a sample
 	settled   bool       // the filter has agreed with the accelerometer at rest once
 	sampleN   int        // samples since the last motion report (console `motion`)
 	restN     int        // … of which the strapdown called rest
@@ -131,7 +136,7 @@ func (a *App) SetIMU(acc, gyro [3]float32, dt float32) {
 	// attitude error read as acceleration: TG-6 capture 0, still 7° off
 	// after 60 s at rest). The owner's squares close only ungated (TG-6
 	// capture 2).
-	m.settle(dt)
+	m.settle(acc, dt)
 	m.in = mat.Matrix3x3{acc, gyro, {}}
 	m.ahrs.GainP = kp
 	if !m.settled {
@@ -243,20 +248,30 @@ func toWorld(q vec.Quaternion, b [3]float32) [3]float32 {
 
 // settle notes when the filter has turned from flat to the badge's pose
 // (the path starts there).
-func (m *motion) settle(dt float32) {
+func (m *motion) settle(acc [3]float32, dt float32) {
 	if m.settled {
 		return
 	}
+	if !m.fSeeded {
+		m.fSettle, m.fSeeded = acc, true
+	}
+	k := dt / (settleTau + dt)
+	for i := range acc {
+		m.fSettle[i] += (acc[i] - m.fSettle[i]) * k
+	}
 	// the filter starts flat and turns to the badge's pose: settled when the
-	// attitude points along the measured force, its direction only. An
+	// attitude points along the averaged force, its direction only. An
 	// attitude can turn the reading but never change its size, and an
 	// uncalibrated MPU6050 reads 0.1–0.5 m/s² off g at rest (the badge:
 	// 9.7), so a test on the size never passed there and the path never
-	// started
-	fw := toWorld(m.ahrs.Output(), m.force) // low-passed: sensor noise doesn't break the run
+	// started. No test of rest sample by sample: in a still hand the gyro
+	// tremor (0.03 rad/s) broke the app's rest test on 30 % of the samples,
+	// the run never reached settleTime and nothing moved (MATH-1 A1); a
+	// real motion turns the average away from the attitude instead.
+	fw := toWorld(m.ahrs.Output(), m.fSettle)
 	f2 := fw[0]*fw[0] + fw[1]*fw[1] + fw[2]*fw[2]
 	const tilt = settleAccel / gravity // the largest angle (rad) left between them
-	if m.biasN >= restFirst && m.resting && fw[2] > 0 && fw[0]*fw[0]+fw[1]*fw[1] < tilt*tilt*f2 {
+	if m.biasN >= restFirst && fw[2] > 0 && fw[0]*fw[0]+fw[1]*fw[1] < tilt*tilt*f2 {
 		m.settleFor += dt
 	} else {
 		m.settleFor = 0

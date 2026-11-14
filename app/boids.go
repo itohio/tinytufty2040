@@ -62,6 +62,7 @@ type boids struct {
 	unitsPerM  float32
 	anchorBase [2]int32
 	anchorDisp [2]float32
+	motion     *motion // nil without an IMU: the full view's settling notice
 }
 
 func newBoids() *boids {

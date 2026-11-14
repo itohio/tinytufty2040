@@ -23,6 +23,9 @@ func (v *pongView) Draw(ctx ui.Context) {
 	const span = pongW * pongFix // world units across; pixels = units·w/span
 	cell := int16(w / pongW)     // pixels per cell
 	fillRect(d, x0, y0, int16(w), h, pongPalette[pongOff])
+	if v == p.full {
+		drawSettling(d, p.motion, x0, y0, int16(w), h)
+	}
 	// net
 	nx := x0 + int16(w/2) - cell/4
 	for y := int16(0); y < h; y += 2 * cell {
