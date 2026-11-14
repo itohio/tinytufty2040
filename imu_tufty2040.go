@@ -4,6 +4,7 @@ package main
 
 import (
 	"machine"
+	"sync"
 	"time"
 
 	"github.com/itohio/EasyRobot/x/devices/mpu6050"
@@ -137,6 +138,30 @@ func fifoStart() error {
 	return mpuWrite(regUserCtrl, 0x40) // enable
 }
 
+// i2cMu gives I2C0 to one goroutine at a time. TinyGo's I2C driver yields
+// inside a transfer (gosched while it waits) and starts every transfer by
+// disabling the peripheral, so a console IMU command reading while the main
+// loop drained broke the transfer ("i2c: peripheral timeout in disable":
+// every imuread failed once the loop yielded instead of sleeping, TG-5 5f).
+// The drain holds it for its whole pass, the console commands for each read
+// (never across their sleeps: a drain held off past 0.85 s loses samples).
+var i2cMu sync.Mutex
+
+// mpuSample and mpuRaw are the console commands' locked reads.
+func mpuSample(s *mpu6050.Sample) error {
+	i2cMu.Lock()
+	err := mpu.Read(s)
+	i2cMu.Unlock()
+	return err
+}
+
+func mpuRaw(r *mpu6050.Raw) error {
+	i2cMu.Lock()
+	err := mpu.ReadRaw(r)
+	i2cMu.Unlock()
+	return err
+}
+
 // imuDrain feeds every sample waiting in the FIFO to the app, at the
 // sensor's own period. After an overflow (a stall longer than 0.85 s) the
 // FIFO restarts: samples are lost, none are misread. For the frame profile
@@ -146,6 +171,13 @@ func imuDrain(a *app.App) (bus time.Duration, samples int) {
 	if mpu == nil {
 		return 0, 0
 	}
+	i2cMu.Lock()
+	bus, samples = imuDrainLocked(a)
+	i2cMu.Unlock()
+	return bus, samples
+}
+
+func imuDrainLocked(a *app.App) (bus time.Duration, samples int) {
 	t0 := time.Now()
 	var st [1]byte
 	if mpuRead(regIntStatus, st[:]) == nil && st[0]&0x10 != 0 {
@@ -195,7 +227,7 @@ func imuRead(n int) {
 	var s mpu6050.Sample
 	for range n {
 		var l console.Line
-		if err := mpu.Read(&s); err != nil {
+		if err := mpuSample(&s); err != nil {
 			l.S("imu: read:").S(err.Error()).Send(&con)
 			return
 		}
@@ -217,7 +249,7 @@ func imuINTCheck() {
 		return
 	}
 	var r mpu6050.Raw
-	_ = mpu.ReadRaw(&r) // clear a pending INT
+	_ = mpuRaw(&r) // clear a pending INT
 	rises, highs, polls := 0, 0, 0
 	prev := imuINT.Get()
 	end := time.Now().Add(500 * time.Millisecond)
@@ -234,7 +266,7 @@ func imuINTCheck() {
 	}
 	var l console.Line
 	l.S("imu: INT phase 1 (no reads, 0.5 s): rises").I(rises).S("high").I(highs).S("of").I(polls).S("polls").Send(&con)
-	_ = mpu.ReadRaw(&r)
+	_ = mpuRaw(&r)
 	rises, highs, polls = 0, 0, 0
 	prev = imuINT.Get()
 	end = time.Now().Add(time.Second)
@@ -246,7 +278,7 @@ func imuINTCheck() {
 		}
 		if v && !prev {
 			rises++
-			_ = mpu.ReadRaw(&r)
+			_ = mpuRaw(&r)
 			v = imuINT.Get()
 		}
 		prev = v

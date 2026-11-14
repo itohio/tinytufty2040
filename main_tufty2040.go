@@ -175,7 +175,14 @@ func main() {
 				boot("first frame")
 			}
 		}
-		time.Sleep(2 * time.Millisecond)
+		// the next frame already due (every page is slower than frameTime):
+		// only yield, so the console goroutines still run; otherwise wait
+		// 2 ms between button polls (TG-5 5f: the fixed sleep cost 2 ms a frame)
+		if time.Since(last) >= frameTime {
+			runtime.Gosched()
+		} else {
+			time.Sleep(2 * time.Millisecond)
+		}
 	}
 }
 
