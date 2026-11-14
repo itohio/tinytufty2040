@@ -135,11 +135,9 @@ func (b *boids) step() {
 		vy += py / 8
 		b.nvx[i], b.nvy[i] = limit(vx, vy)
 	}
-	// move in the world, then meet the box's walls: seen from the box, a
-	// boid near a wall is pushed inwards, one past it (the wall moved, or it
-	// flew) is put back and bounces (the minimum speed would otherwise undo
-	// the push for a boid flying straight at a wall). Only boids a wall
-	// touches are converted back, so the others keep their world heading.
+	// move in the world, then meet the box's walls (walls): a boid past one
+	// turns inwards (the minimum speed would otherwise undo the push for a
+	// boid flying straight at a wall), carried by the wall or gliding back.
 	for i := range n {
 		b.vx[i], b.vy[i] = b.nvx[i], b.nvy[i]
 		b.x[i] += b.vx[i]
@@ -148,7 +146,22 @@ func (b *boids) step() {
 	}
 }
 
-// walls applies the box's walls to boid i.
+// boidsCarry is how far past a wall (per axis) the wall still carries a boid
+// (puts it on the wall): a boid's own flight in a tick (0.5 cell) plus a
+// shake or a turn of the box (about a cell a tick). Farther out, the window has outrun the
+// boid (a hand stroke: up to 44 cells a tick, TG-6 #5a): it is left outside
+// and glides back, 1/boidsReturn of the way to the wall each tick.
+const (
+	boidsCarry  = 3 * boidsFix / 2
+	boidsReturn = 6
+)
+
+// walls applies the box's walls to boid i. A boid near a wall is pushed
+// inwards. One past it turns inwards; the wall carries it if it is just
+// past, otherwise it glides back. Never reflected across: a boid the window
+// left 40 cells behind used to land 40 cells inside, a jump across the
+// window (the owner's "they jump around"). Only boids a wall touches are
+// converted back, so the others keep their world heading.
 func (b *boids) walls(i int) {
 	const push = 16
 	const hiX, hiY = boidsW*boidsFix - 1, boidsH*boidsFix - 1
@@ -171,23 +184,31 @@ func (b *boids) walls(i int) {
 	case by > hiY-boidsMargin:
 		vy -= push
 	}
-	nx, nvx := bounce(bx, vx, hiX)
-	ny, nvy := bounce(by, vy, hiY)
-	nx, ny = min(max(nx, 0), hiX), min(max(ny, 0), hiY) // a fast wall can throw it far
+	nx, vx := wall(bx, vx, hiX)
+	ny, vy := wall(by, vy, hiY)
 	if nx != bx || ny != by {
 		b.x[i], b.y[i] = p.toWorld(nx, ny)
 	}
-	b.vx[i], b.vy[i] = limit(p.vecToWorld(nvx, nvy))
+	b.vx[i], b.vy[i] = limit(p.vecToWorld(vx, vy))
 }
 
-func bounce(p, v, hi int32) (int32, int32) {
+// wall meets one axis's walls (0 and hi, box units): a boid past one turns
+// inwards; just past (boidsCarry) the wall carries it, farther it glides
+// back a part of the way.
+func wall(p, v, hi int32) (int32, int32) {
+	var over int32 // how far past the wall, signed outwards
 	switch {
 	case p < 0:
-		return -p, abs32(v)
+		over, v = p, abs32(v)
 	case p > hi:
-		return 2*hi - p, -abs32(v)
+		over, v = p-hi, -abs32(v)
+	default:
+		return p, v
 	}
-	return p, v
+	if abs32(over) <= boidsCarry {
+		return p - over, v
+	}
+	return p - over/boidsReturn, v
 }
 
 // octant of a heading: 0 east, counting clockwise on screen (y down).
@@ -267,10 +288,17 @@ func (b *boids) tick() {
 	cx, cy := b.pose.cx, b.pose.cy
 	b.histC[b.histI] = [2]int32{cx, cy}
 	for i := range boidsN[b.count] {
-		b.hist[i][b.histI] = [2]int16{int16(b.x[i] - cx), int16(b.y[i] - cy)}
+		b.hist[i][b.histI] = histPoint(b.x[i]-cx, b.y[i]-cy)
 	}
 	b.histI = (b.histI + 1) % boidsHist
 	b.stepUS = time.Since(t0).Microseconds()
+}
+
+// histPoint is a trail point relative to the box centre, saturated to
+// int16: a boid the window left behind may be farther than int16 holds
+// (128 cells), and a wrapped point would show inside the window.
+func histPoint(dx, dy int32) [2]int16 {
+	return [2]int16{int16(min(max(dx, math.MinInt16), math.MaxInt16)), int16(min(max(dy, math.MinInt16), math.MaxInt16))}
 }
 
 func (b *boids) fullView() ui.Widget {
@@ -312,16 +340,19 @@ func (a *App) pageBoids() *page {
 	b := a.boids
 	count := widget.NewInteractiveLabelChoice(52, 11, boidsCounts,
 		widget.WithLabelChoiceIndex(&b.count), widget.WithLabelChoiceFont(fontBody), widget.WithLabelChoiceColor(colFG))
-	scatter := widget.NewToggle(44, 12, fontBody, colFG, "GO", "GO", colTrack, colTrack,
-		func() bool { return false }, func(bool) { b.scatter(); a.log("boids scatter") })
 	spin := widget.NewToggle(44, 12, fontBody, colFG, "ON", "OFF", colGood, colTrack,
 		func() bool { return b.pose.spin }, func(v bool) { b.pose.spin = v })
 	full := widget.NewToggle(44, 12, fontBody, colFG, "SHOW", "SHOW", colTrack, colTrack,
 		func() bool { return false }, func(bool) { b.fullOn = true; a.log("boids full screen") })
+	gather := widget.NewToggle(44, 12, fontBody, colFG, "GO", "GO", colTrack, colTrack,
+		func() bool { return false }, func(bool) { b.gather(); a.log("boids gather") })
+	scatter := widget.NewToggle(44, 12, fontBody, colFG, "GO", "GO", colTrack, colTrack,
+		func() bool { return false }, func(bool) { b.scatter(); a.log("boids scatter") })
 	// explicit height: findings F-33
 	p := a.newPageWith("Boids", layout.VFlow(4, boidsH*boidsPitch),
 		still(b.grid),
 		newField("Boids", 42, 104, count),
+		newField("Gather", 42, 104, gather),
 		newField("Scatter", 42, 104, scatter),
 		newField("Spin", 42, 104, spin),
 		newField("Full", 42, 104, full),
@@ -334,19 +365,26 @@ func (a *App) pageBoids() *page {
 func (b *boids) tileViews() (ui.Widget, ui.Widget) { return b.tiles[0], b.tiles[1] }
 func (b *boids) showFull()                         { b.fullOn = true }
 
-// reset scatters every boid at a random place and heading in a straight box.
+// reset straightens the box at the world's centre and gathers the flock
+// into it.
 func (b *boids) reset() {
 	b.pose = newBoxPose()
+	b.gather()
+}
+
+// gather puts every boid at a random place and heading inside the window
+// where it is now, moved and turned (owner, TG-6 #5: a control that resets
+// the flock into the window), with no trail.
+func (b *boids) gather() {
 	for i := range boidsMax {
-		b.x[i] = int32(rand32() % (boidsW * boidsFix))
-		b.y[i] = int32(rand32() % (boidsH * boidsFix))
+		b.x[i], b.y[i] = b.pose.toWorld(int32(rand32()%(boidsW*boidsFix)), int32(rand32()%(boidsH*boidsFix)))
 		b.vx[i] = int32(rand32()%(2*boidsVMax)) - boidsVMax
 		b.vy[i] = int32(rand32()%(2*boidsVMax)) - boidsVMax
 	}
-	for k := range boidsHist { // no trail yet: every history slot is the start
+	for k := range boidsHist { // every history slot is now
 		b.histC[k] = [2]int32{b.pose.cx, b.pose.cy}
 		for i := range boidsMax {
-			b.hist[i][k] = [2]int16{int16(b.x[i] - b.pose.cx), int16(b.y[i] - b.pose.cy)}
+			b.hist[i][k] = histPoint(b.x[i]-b.pose.cx, b.y[i]-b.pose.cy)
 		}
 	}
 }

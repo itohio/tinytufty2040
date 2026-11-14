@@ -90,27 +90,30 @@ func abs(v int) int {
 
 // toBox maps a world point into box coordinates (0..boidsW*boidsFix across).
 // Division, not >>: the shift rounds negative values away from zero and
-// would bias the flock (F-35's cousin in the boids, see step).
+// would bias the flock (F-35's cousin in the boids, see step). In int64: a
+// boid the window left behind may be any distance away, and the Q14
+// products wrapped int32 past 512 cells (TG-6 #5a).
 func (p *boxPose) toBox(x, y int32) (int32, int32) {
-	s, c := p.sincos()
-	dx, dy := x-p.cx, y-p.cy
-	return (c*dx+s*dy)/q14 + boidsW*boidsFix/2, (-s*dx+c*dy)/q14 + boidsH*boidsFix/2
+	s, c := int64(p.sin), int64(p.cos)
+	dx, dy := int64(x)-int64(p.cx), int64(y)-int64(p.cy)
+	return int32((c*dx+s*dy)/q14) + boidsW*boidsFix/2, int32((-s*dx+c*dy)/q14) + boidsH*boidsFix/2
 }
 
 // toWorld maps box coordinates back to the world.
 func (p *boxPose) toWorld(bx, by int32) (int32, int32) {
-	s, c := p.sincos()
-	dx, dy := bx-boidsW*boidsFix/2, by-boidsH*boidsFix/2
-	return (c*dx-s*dy)/q14 + p.cx, (s*dx+c*dy)/q14 + p.cy
+	s, c := int64(p.sin), int64(p.cos)
+	dx, dy := int64(bx)-boidsW*boidsFix/2, int64(by)-boidsH*boidsFix/2
+	return int32((c*dx-s*dy)/q14) + p.cx, int32((s*dx+c*dy)/q14) + p.cy
 }
 
-// vecToBox / vecToWorld rotate a velocity between the frames.
+// vecToBox / vecToWorld rotate a vector between the frames (int64, as
+// toBox: a glide back can be long).
 func (p *boxPose) vecToBox(vx, vy int32) (int32, int32) {
-	s, c := p.sincos()
-	return (c*vx + s*vy) / q14, (-s*vx + c*vy) / q14
+	s, c := int64(p.sin), int64(p.cos)
+	return int32((c*int64(vx) + s*int64(vy)) / q14), int32((-s*int64(vx) + c*int64(vy)) / q14)
 }
 
 func (p *boxPose) vecToWorld(vx, vy int32) (int32, int32) {
-	s, c := p.sincos()
-	return (c*vx - s*vy) / q14, (s*vx + c*vy) / q14
+	s, c := int64(p.sin), int64(p.cos)
+	return int32((c*int64(vx) - s*int64(vy)) / q14), int32((s*int64(vx) + c*int64(vy)) / q14)
 }

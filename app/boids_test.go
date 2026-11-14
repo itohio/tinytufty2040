@@ -116,3 +116,75 @@ func TestBoidsFeelTheBadgesAcceleration(t *testing.T) {
 		t.Fatalf("4 m/s² felt to the right: the flock's mean vx %+.0f, still badge %+.0f; want it pushed right", felt, still)
 	}
 }
+
+// The window outruns the flock in a hand stroke (TG-6 #5a: up to 44 cells a
+// tick against a boid's 0.5): the boids it leaves behind stay outside and
+// glide back in, and none jumps across the window (owner: "they jump
+// around"; the walls used to reflect a boid swept 40 cells out to 40 cells
+// in). Replays the owner's squares (capture 2); then, the window still,
+// every boid is back inside within 2 s.
+func TestBoidsComeBackSmoothlyAfterTheWindowMoves(t *testing.T) {
+	s, rate := loadCapture(t, "testdata/tg6-squares.log")
+	a := testApp()
+	a.motion = newMotion()
+	b := a.boids
+	n := boidsN[b.count]
+	const span, hiY = boidsW * boidsFix, boidsH * boidsFix
+	inside := func(i int) bool {
+		bx, by := b.pose.toBox(b.x[i], b.y[i])
+		return bx >= 0 && bx < span && by >= 0 && by < hiY
+	}
+	var px, py [boidsMax]int32
+	copy(px[:], b.x[:])
+	copy(py[:], b.y[:])
+	worst, ticks := 0.0, 0
+	tick := func() {
+		b.tick()
+		ticks++
+		for i := range n {
+			if inside(i) {
+				d := math.Hypot(float64(b.x[i]-px[i]), float64(b.y[i]-py[i])) / boidsFix
+				worst = max(worst, d)
+			}
+			px[i], py[i] = b.x[i], b.y[i]
+		}
+	}
+	replay(a, s, rate, func(i int) {
+		if i%5 == 4 {
+			tick()
+		}
+	})
+	if worst > 3 {
+		t.Errorf("a boid in the window moved %.1f cells in one tick, want at most 3 (a wall carries a boid 1.5 cells an axis at most; its speed is 0.5)", worst)
+	}
+	for range 40 { // 2 s at 20 frames a second, the window still
+		tick()
+	}
+	out := 0
+	for i := range n {
+		if !inside(i) {
+			out++
+		}
+	}
+	if out > 0 {
+		t.Errorf("%d of %d boids still outside the window 2 s after it stopped", out, n)
+	}
+}
+
+// Gather puts the whole flock inside the window where it is now, moved and
+// turned (owner: a control that resets the flock into the window).
+func TestGatherPutsTheFlockInTheWindow(t *testing.T) {
+	b := newBoids()
+	b.count = 2
+	b.moveTo(0.3, -0.2) // 30 cm right, 20 cm down: far outside the start box
+	b.turnTo(1.7)
+	b.pose.advance()
+	b.gather()
+	const span, hiY = boidsW * boidsFix, boidsH * boidsFix
+	for i := range boidsN[b.count] {
+		bx, by := b.pose.toBox(b.x[i], b.y[i])
+		if bx < 0 || bx >= span || by < 0 || by >= hiY {
+			t.Fatalf("boid %d at box (%d, %d) after gather, want inside 0..%d × 0..%d", i, bx, by, span, hiY)
+		}
+	}
+}

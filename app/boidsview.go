@@ -47,7 +47,9 @@ func (v *boidsView) Draw(ctx ui.Context) {
 	}
 	for i := range n {
 		bx, by := b.pose.toBox(b.x[i], b.y[i])
-		bx, by = min(max(bx, 0), span-1), min(max(by, 0), boidsH*boidsFix-1)
+		if bx < 0 || by < 0 || bx >= span || by >= boidsH*boidsFix {
+			continue // left outside by the window, gliding back (walls)
+		}
 		o := octant(b.pose.vecToBox(b.vx[i], b.vy[i]))
 		c := boidsPalette[boidsTrail+1+o]
 		x, y := x0+int16(bx*w/span), y0+int16(by*w/span)
