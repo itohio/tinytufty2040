@@ -365,3 +365,28 @@ func TestSettlingIsShown(t *testing.T) {
 		t.Fatalf("after it started: footer notice %v, %d notice pixels on PLAY; want neither", f, n)
 	}
 }
+
+// A2/A3/E2: held still in the hand for 60 s, the paddle and the window stay put.
+func TestMath1StillInTheHandShowsNoMotion(t *testing.T) {
+	r := newRig()
+	s := newSensor(3, 0.016, 0.0006, 0, 0)
+	for range 10 * imuRate {
+		a, g := s.sample([3]float64{})
+		r.feed(a, g, 0.01)
+	}
+	accSD, gyroSD, tremA, tremG := noiseOf(hand)
+	s.accSD, s.gyroSD, s.tremA, s.tremG = accSD, gyroSD, tremA, tremG
+	p0 := r.paddle()
+	wx0, wy0 := r.window()
+	var pMax, wMax float64
+	for range 60 * imuRate {
+		a, g := s.sample([3]float64{})
+		r.feed(a, g, 0.01)
+		wx, wy := r.window()
+		pMax = max(pMax, math.Abs(r.paddle()-p0))
+		wMax = max(wMax, math.Hypot(wx-wx0, wy-wy0))
+	}
+	if pMax > 0.5 || wMax > 0.5 {
+		t.Errorf("still in the hand 60 s: paddle moved up to %.2f cells, window %.2f cells (want ≤ 0.5)", pMax, wMax)
+	}
+}

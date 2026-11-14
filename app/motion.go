@@ -51,6 +51,28 @@ const (
 	fadeMove    = 1.0 // s
 	leakTau     = 1.5 // s
 	recentreTau = 2.0 // s
+	// the app's own stillness (MATH-1 A3): the force vector's variance (its
+	// three axes: a horizontal move hardly changes |f|) and the gyro's mean
+	// square (after the bias), over quietTau, under quietAccel and quietGyro.
+	// A still hand's tremor is under both; a hand move isn't, whatever the
+	// strapdown's rest test says
+	quietTau   = 0.5  // s
+	quietAccel = 0.15 // m/s²: standard deviation of f (all axes)
+	quietGyro  = 0.1  // rad/s: RMS
+	// over this gyro RMS the badge is in a hand: a stroke so far is held
+	// when quiet; on a support it's the strapdown's path, as before
+	quietHandG = 0.008 // rad/s
+	// a motion with a sustained push isn't quiet however smooth it is: the
+	// world acceleration's quietFast average less its quietSlow baseline (a
+	// slow attitude error cancels) under quietPush. A steady hand's tremor
+	// peaks at 0.044 m/s², a 10 cm stroke in 2 s at 0.08-0.12
+	quietFast = 0.25 // s
+	quietSlow = 2.0  // s
+	quietPush = 0.06 // m/s²
+	// a hold starts only once still for quietHold in a row: a stroke's
+	// acceleration crosses zero at its middle (its peak speed), and that
+	// brief quiet mustn't stop it
+	quietHold = 0.3 // s
 )
 
 type motion struct {
@@ -83,6 +105,18 @@ type motion struct {
 	anchor    [3]float32 // pos where the current or last motion began
 	moveFor   float32    // s since the badge left rest (0 at rest)
 	long      bool       // the last motion lasted holdMove or more: at rest pos goes back to anchor
+	qMean     [3]float32 // f averaged over quietTau
+	qVar      float32    // |f − qMean|² averaged over quietTau
+	qG2       float32    // |gyro|² after the bias, averaged over quietTau
+	qSeeded   bool       // qMean starts at the first sample
+	qFast     [3]float32 // world acceleration less gravity, averaged over quietFast
+	qSlow     [3]float32 // and over quietSlow
+	offHold   [3]float32 // off when the current hold began
+	holdFor   float32    // s the shown position has been held (quiet, the strapdown awake); 0 when not
+	wakeFor   float32    // s since the strapdown last left rest (0 at rest)
+	quietFor  float32    // s the app's stillness has said still in a row
+	vRecent   [3]float32 // the world acceleration less gravity, integrated with a quietTau*2 leak
+	pRecent   [3]float32 // vRecent integrated the same way
 	disp      [3]float32 // m, badge axes (+X right, +Y up the screen, +Z out of it)
 	force     [3]float32 // m/s², badge axes, low-passed (forceTau)
 	lastPos   [3]float32 // pos at the previous sample
@@ -307,14 +341,107 @@ func (m *motion) resetPath() {
 //     doesn't.
 //   - After such a motion the position goes back there at rest, and the
 //     strapdown is followed again from wherever pos is.
+//
+// quiet reports the app's own stillness after this sample.
+func (m *motion) quiet(q vec.Quaternion, acc [3]float32, dt float32) bool {
+	aw := toWorld(q, acc)
+	aw[2] -= m.gRest
+	kf, ks := dt/(quietFast+dt), dt/(quietSlow+dt)
+	var p2 float32
+	for i := range aw {
+		m.vRecent[i] += (aw[i] - m.vRecent[i]/(2*quietTau)) * dt
+		m.pRecent[i] += (m.vRecent[i] - m.pRecent[i]/(2*quietTau)) * dt
+		m.qFast[i] += (aw[i] - m.qFast[i]) * kf
+		m.qSlow[i] += (aw[i] - m.qSlow[i]) * ks
+		e := m.qFast[i] - m.qSlow[i]
+		p2 += e * e
+	}
+	if !m.qSeeded {
+		m.qMean, m.qSeeded = acc, true
+	}
+	k := dt / (quietTau + dt)
+	var d2 float32
+	for i := range acc {
+		d := acc[i] - m.qMean[i]
+		d2 += d * d
+		m.qMean[i] += d * k
+	}
+	m.qVar += (d2 - m.qVar) * k
+	g := m.lastGyro
+	m.qG2 += (g[0]*g[0] + g[1]*g[1] + g[2]*g[2] - m.qG2) * k
+	return m.qVar < quietAccel*quietAccel && m.qG2 < quietGyro*quietGyro && p2 < quietPush*quietPush
+}
+
+// inHand reports a hand, not a support: a hand always turns a little
+// (0.025-0.07 rad/s RMS; a desk 0.001), a stroke from rest hardly at all.
+func (m *motion) inHand() bool { return m.qG2 > quietHandG*quietHandG }
+
 func (m *motion) track(q vec.Quaternion, acc [3]float32, dt float32) {
+	quiet := m.quiet(q, acc, dt)
+	if m.nav.Still {
+		m.wakeFor = 0
+	} else {
+		m.wakeFor += dt
+	}
+	if quiet {
+		m.quietFor += dt
+	} else {
+		m.quietFor = 0
+	}
+	// MATH-1 A3: the strapdown wakes on a still badge (a hand's tremor, taps,
+	// a creep) and its position drifts while it's awake; that isn't shown.
+	// When the app's own stillness says still and the strapdown is awake,
+	// the shown position holds: in a hand always, on a support once a motion
+	// is long (a stroke from rest on a support is the strapdown's path, as
+	// before). Only the strapdown's rest ends a motion
+	if m.quietFor >= quietHold && !m.nav.Still && (m.inHand() || m.moveFor >= holdMove) {
+		if m.holdFor == 0 {
+			m.offHold = m.off
+		}
+		m.holdFor += dt
+		if m.moveFor > 0 {
+			// a motion under way keeps its clock: its stroke hands over to
+			// long mode on time (the owner's squares pause at the corners)
+			m.moveFor += dt
+		}
+		m.vel = [3]float32{}
+		m.hold()
+		return
+	}
+	if m.holdFor > 0 && !m.nav.Still && m.holdFor < 2*quietTau && m.moveFor < holdMove {
+		// the hold was shorter than the quiet test's response time (two of
+		// its time constants): its lag at a motion's start, or a dip in the
+		// middle of one, not a wake's drift; the strapdown's path through it
+		// is shown, and a motion starting now is timed from the hold's start
+		m.off = m.offHold
+		if m.moveFor == 0 {
+			m.anchor, m.long = m.pos, false
+			m.moveFor = m.holdFor - dt
+			m.trustNav(dt)
+		}
+		if m.moveFor+dt < holdMove { // a long motion never snaps onto the strapdown's path
+			m.followNav()
+		}
+	}
+	if m.holdFor > 0 && m.moveFor >= holdMove {
+		// a long motion leaves a hold with the velocity gained while the
+		// quiet test was still deciding (a stroke starts gently): without
+		// it the stroke's start is lost and its full deceleration runs it
+		// backwards
+		m.resume()
+	}
+	m.holdFor = 0
 	if m.nav.Still {
 		if m.moveFor > 0 { // a motion has just ended
 			m.long = m.moveFor >= holdMove
 			m.moveFor = 0
 		}
 		if !m.long {
-			m.followNav()
+			if quiet && m.inHand() {
+				m.hold() // its rest-entry correction of a wake's drift isn't shown either
+			} else {
+				m.followNav()
+			}
 			return
 		}
 		k := dt / recentreTau
@@ -326,6 +453,7 @@ func (m *motion) track(q vec.Quaternion, acc [3]float32, dt float32) {
 	}
 	if m.moveFor == 0 { // a motion begins
 		m.anchor, m.long = m.pos, false
+		m.trustNav(dt)
 	}
 	m.moveFor += dt
 	if m.moveFor < holdMove { // a stroke so far: the strapdown's path
@@ -339,6 +467,35 @@ func (m *motion) track(q vec.Quaternion, acc [3]float32, dt float32) {
 	for i := range aw {
 		m.vel[i] += (aw[i] - m.vel[i]*leak) * dt
 		m.pos[i] += (m.vel[i] - (m.pos[i]-m.anchor[i])*leak) * dt
+	}
+}
+
+// trustNav starts a motion in long mode (the app's own path) when the
+// strapdown has been awake since before it: in a hand it always is, and on
+// real data its path after a long wake runs off during a motion (its own
+// attitude has drifted, MATH-1 E1: the owner's squares ran 47 cm off in
+// 2 s). A motion that woke it shows its path, as before.
+func (m *motion) trustNav(dt float32) {
+	if m.wakeFor > m.moveFor+dt+2*quietTau {
+		m.moveFor = holdMove
+		m.resume()
+	}
+}
+
+// resume starts long mode with the path gained while the quiet test was
+// still deciding: the velocity and distance of the last second or so.
+func (m *motion) resume() {
+	m.vel = m.vRecent
+	for i := range m.pos {
+		m.pos[i] += m.pRecent[i]
+	}
+}
+
+// hold keeps the shown position where it is, whatever the strapdown's
+// position does: off follows it.
+func (m *motion) hold() {
+	for i := range m.off {
+		m.off[i] = m.pos[i] - m.nav.P[i]
 	}
 }
 
