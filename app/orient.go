@@ -53,7 +53,7 @@ type pathTrack struct {
 // with the metres, the rounding alone exceeded the step at rest and every
 // frame stored the same point again, pushing the path out of the ring.
 func (p *pathTrack) record() {
-	mm := toMM(p.m.nav.P)
+	mm := toMM(p.m.pos)
 	if p.n > 0 {
 		l := p.pts[(p.i-1+pathPoints)%pathPoints]
 		dx, dy, dz := int32(mm[0])-int32(l[0]), int32(mm[1])-int32(l[1]), int32(mm[2])-int32(l[2])
@@ -108,7 +108,7 @@ func (v *pathView) setCamera(back float32) {
 	m := v.t.m
 	v.q = m.ahrs.Output()
 	look := toWorld(v.q, [3]float32{0, 0, -1})
-	p := m.nav.P
+	p := m.pos
 	v.cam = [3]float32{p[0] - back*look[0], p[1] - back*look[1], p[2] - back*look[2]}
 }
 
@@ -129,7 +129,7 @@ func (v *pathView) project(w [3]float32) (x, y float32, ok bool) {
 // path, as far as it reaches from the latest position, fits the view.
 func (v *pathView) back() float32 {
 	t := v.t
-	p := t.m.nav.P
+	p := t.m.pos
 	var reach float32
 	for k := range t.n {
 		q := fromMM(t.pts[k])
@@ -307,7 +307,7 @@ func (a *App) pageMotion() *page {
 		newField("Full", 34, 104, full),
 		newField("Path", 34, 104, reset),
 		still(a.text(104, func() string {
-			return m.txt[0].reset().str("x ").int(cm(m.nav.P[0])).str(" y ").int(cm(m.nav.P[1])).str(" z ").int(cm(m.nav.P[2])).str(" cm").String()
+			return m.txt[0].reset().str("x ").int(cm(m.pos[0])).str(" y ").int(cm(m.pos[1])).str(" z ").int(cm(m.pos[2])).str(" cm").String()
 		}, colMuted)),
 		still(a.text(104, func() string {
 			return m.txt[1].reset().str("roll ").int(deg(m.rpy[0])).str(" pitch ").int(deg(m.rpy[1])).String()

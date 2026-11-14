@@ -41,6 +41,13 @@ const (
 	// steady gain
 	kpSettle = 10
 	kp       = 2
+	// the shown position (track): a motion shorter than holdMove ends where
+	// it went; longer, the leak fades in over fadeMove up to 1/leakTau; after
+	// a long motion the position goes back to where it began (recentreTau)
+	holdMove    = 2.0 // s: a 10 cm stroke takes about 1 s
+	fadeMove    = 1.0 // s
+	leakTau     = 1.5 // s
+	recentreTau = 2.0 // s
 )
 
 type motion struct {
@@ -49,26 +56,33 @@ type motion struct {
 	bias     [3]float32
 	biasN    int        // rest samples in the first estimate (restFirst: done)
 	resting  bool       // the last sample was at rest
+	gRest    float32    // |a| at rest (m/s²): gravity as this accelerometer reads it (9.7 upright, 10.0 flat)
 	up       [3]float32 // world up in the badge's frame, once a frame (frameMotion)
 	fresh    bool       // samples arrived since the last frameMotion
 	samples  int
 	rpy      [3]float32 // roll, pitch, yaw (rad), badge-relative, once a frame: see badgeEuler
 	yaw0     float32    // the yaw at the last path reset: yaw is shown from there
 	lastGyro [3]float32 // after the bias
-	// the path: EasyRobot's strapdown brick (x/math/nav/strapdown) on the
-	// filter's attitude: nav.P is the position (m, world, z up), nav.Still
-	// whether the badge rests (velocity held at zero)
+	// EasyRobot's strapdown brick (x/math/nav/strapdown) on the filter's
+	// attitude, for nav.Still: whether the badge rests
 	nav strapdown.Nav
 	// the shared motion state every demo reads (owner 2026-11-13: one
 	// motion state, computed once per IMU sample): the attitude (ahrs),
-	// the world position (nav.P), and, in the badge's own frame (owner:
-	// "vertical position in the badge frame of reference ... same for water
-	// and fire"), the displacement (each world step turned into the badge's
-	// axes as it is now, summed) and the specific force (what the
-	// accelerometer reads: gravity plus the badge's own acceleration)
+	// the shown world position (pos, see track), and, in the badge's own
+	// frame (owner: "vertical position in the badge frame of reference ...
+	// same for water and fire"), the displacement (each world step turned
+	// into the badge's axes as it is now, summed) and the specific force
+	// (what the accelerometer reads: gravity plus the badge's own
+	// acceleration)
+	pos       [3]float32 // m, world (z up): the shown position (track)
+	vel       [3]float32 // m/s, world: pos's velocity during a long motion
+	off       [3]float32 // pos − nav.P while pos follows the strapdown (at rest, in a stroke)
+	anchor    [3]float32 // pos where the current or last motion began
+	moveFor   float32    // s since the badge left rest (0 at rest)
+	long      bool       // the last motion lasted holdMove or more: at rest pos goes back to anchor
 	disp      [3]float32 // m, badge axes (+X right, +Y up the screen, +Z out of it)
 	force     [3]float32 // m/s², badge axes, low-passed (forceTau)
-	lastP     [3]float32 // nav.P at the previous sample
+	lastPos   [3]float32 // pos at the previous sample
 	movesN    int        // the strapdown's moving episodes since the last motion report
 	wasStill  bool       // the last sample was at rest (an episode starts when it leaves rest)
 	settleFor float32    // s in a row the attitude has explained the accelerometer at rest
@@ -87,7 +101,7 @@ func newMotion() *motion {
 	// integral wound up while the filter turns from flat to the badge's pose
 	// kept turning it after
 	return &motion{ahrs: ahrs.NewMahony(ahrs.WithKP(kpSettle), ahrs.WithKI(0), ahrs.WithMagnetometer(false)),
-		up: [3]float32{0, 1, 0}, nav: nav, force: [3]float32{0, gravity, 0}}
+		up: [3]float32{0, 1, 0}, nav: nav, force: [3]float32{0, gravity, 0}, gRest: gravity}
 }
 
 // SetIMU feeds one IMU sample (accelerometer m/s², gyro rad/s, sensor =
@@ -130,16 +144,16 @@ func (a *App) SetIMU(acc, gyro [3]float32, dt float32) {
 		// power-on, the strapdown learnt its bias while the filter still
 		// turned from flat to upright (0.27 m/s² off), and a bias error above
 		// its rest threshold kept it from ever seeing a rest to re-learn at
-		// (a tilt then moved the path metres)
 		m.nav.Update(dt, [4]float32(q), acc, gyro)
+		m.track(q, acc, dt)
 	}
 	m.sampleN++
 	if m.nav.Still {
 		m.restN++
 	}
 	// the world step since the last sample, turned into the badge's axes
-	d := [3]float32{m.nav.P[0] - m.lastP[0], m.nav.P[1] - m.lastP[1], m.nav.P[2] - m.lastP[2]}
-	m.lastP = m.nav.P
+	d := [3]float32{m.pos[0] - m.lastPos[0], m.pos[1] - m.lastPos[1], m.pos[2] - m.lastPos[2]}
+	m.lastPos = m.pos
 	m.addStep(toBadge(q, d), m.nav.Still)
 	k := dt / (forceTau + dt)
 	for i := range acc {
@@ -177,8 +191,8 @@ func (a *App) frameMotion() {
 //     feel the badge's own acceleration (a shake stirs them).
 //   - Pong's paddle follows the displacement along the badge's own up axis
 //     (pong.follow reads disp).
-//   - The Motion page's path is the world position, seen from the badge
-//     (pathTrack reads nav.P; pathView turns the camera with the attitude).
+//   - The Motion page's path is the shown world position, seen from the
+//     badge (pathTrack reads pos; pathView turns the camera with the attitude).
 func (a *App) applyMotion() {
 	m := a.motion
 	// screen x right = +X, y down = −Y; things fall against the specific force
@@ -257,8 +271,67 @@ func (m *motion) settle(dt float32) {
 // accelerometer bias is kept) and makes the badge's heading now yaw 0.
 func (m *motion) resetPath() {
 	m.nav.Reset()
-	m.lastP = [3]float32{}
+	m.pos, m.vel, m.off, m.anchor, m.lastPos = [3]float32{}, [3]float32{}, [3]float32{}, [3]float32{}, [3]float32{}
+	m.moveFor, m.long = 0, false
 	_, _, m.yaw0 = badgeEuler(m.ahrs.Output())
+}
+
+// track moves the shown position: the hybrid the owner chose (TG-6 3b,
+// 2026-11-14).
+//   - At rest and through a short stroke it follows the strapdown, which
+//     integrates rest to rest (its own motion onset and rotation in place
+//     included): the stroke ends where it went and holds there.
+//   - A motion longer than holdMove can't be integrated with this sensor (a
+//     1° tilt error is about 30 m in 20 s of hand motion: the strapdown's
+//     position ran away in the owner's capture 2). From then on the world
+//     acceleration (the force turned by the filter's attitude, which the
+//     accelerometer keeps level, less gravity as this accelerometer reads it
+//     at rest) is integrated with velocity and position leaking toward
+//     where the motion began, faded in over fadeMove: the motion's shape
+//     shows at its size (the owner's 15–30 cm squares) and slow drift
+//     doesn't.
+//   - After such a motion the position goes back there at rest, and the
+//     strapdown is followed again from wherever pos is.
+func (m *motion) track(q vec.Quaternion, acc [3]float32, dt float32) {
+	if m.nav.Still {
+		if m.moveFor > 0 { // a motion has just ended
+			m.long = m.moveFor >= holdMove
+			m.moveFor = 0
+		}
+		if !m.long {
+			m.followNav()
+			return
+		}
+		k := dt / recentreTau
+		for i := range m.pos {
+			m.pos[i] += (m.anchor[i] - m.pos[i]) * k
+			m.off[i] = m.pos[i] - m.nav.P[i]
+		}
+		return
+	}
+	if m.moveFor == 0 { // a motion begins
+		m.anchor, m.long = m.pos, false
+	}
+	m.moveFor += dt
+	if m.moveFor < holdMove { // a stroke so far: the strapdown's path
+		m.followNav()
+		m.vel = m.nav.V
+		return
+	}
+	leak := min(1, (m.moveFor-holdMove)/fadeMove) / leakTau
+	aw := toWorld(q, acc)
+	aw[2] -= m.gRest
+	for i := range aw {
+		m.vel[i] += (aw[i] - m.vel[i]*leak) * dt
+		m.pos[i] += (m.vel[i] - (m.pos[i]-m.anchor[i])*leak) * dt
+	}
+}
+
+// followNav puts the shown position on the strapdown's, shifted by off.
+func (m *motion) followNav() {
+	for i := range m.pos {
+		m.pos[i] = m.nav.P[i] + m.off[i]
+	}
 }
 
 // badgeEuler is the badge's attitude as the owner reads it (verify2
@@ -316,11 +389,13 @@ func (m *motion) learnBias(acc, gyro [3]float32) {
 		for i := range gyro {
 			m.bias[i] += (gyro[i] - m.bias[i]) / float32(m.biasN)
 		}
+		m.gRest += (an - m.gRest) / float32(m.biasN)
 		return
 	}
 	for i := range gyro {
 		m.bias[i] += (gyro[i] - m.bias[i]) * biasRate
 	}
+	m.gRest += (an - m.gRest) * biasRate
 }
 
 // addStep adds one sample's step (m, badge axes) to the badge-frame

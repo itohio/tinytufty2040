@@ -82,7 +82,7 @@ The Tufty 2040 has none on board: the I2C bus (GPIO4 SDA, GPIO5 SCL, GPIO3 INT) 
 
 **One shared motion state** (owner 2026-11-13; `app/motion.go`), updated once per sample, read by every demo (no demo integrates anything itself):
 - **attitude:** EasyRobot's Mahony filter (6-axis). The gyro bias is learnt at rest. The gain is high until the filter has turned from flat to the badge's pose, then steady. The accelerometer corrects the tilt on every sample, with no gyro-only gate: a gate held the correction off through hand motion and after a flip, and the tilt error leaked gravity into the motion (TG-6: the owner's captures replayed).
-- **world position:** EasyRobot's strapdown (`x/math/nav/strapdown`) on that attitude, gravity removed, held at zero velocity at rest. It is fed only once the filter has settled: fed from power-on, it learnt a bias while the filter still turned, and a tilt then moved the path metres.
+- **world position (shown):** the hybrid the owner chose (TG-6 3b). At rest and through a short stroke (under 2 s) it follows EasyRobot's strapdown (`x/math/nav/strapdown`) on that attitude, which integrates rest to rest: a stroke ends where it went and holds. A longer continuous motion can't be integrated with this sensor (a 1° tilt error is about 30 m in 20 s; the strapdown's position ran away in the owner's hand-held capture), so from 2 s on the world acceleration (the force turned by the attitude, less gravity as this accelerometer reads it at rest) is integrated with velocity and position leaking toward where the motion began (τ 1.5 s): the motion's shape shows at its size; after it, at rest, the position goes back there. The strapdown is fed only once the filter has settled: fed from power-on, it learnt a bias while the filter still turned, and a tilt then moved the path metres.
 - **in the badge's own frame** (owner: "vertical position in the badge frame of reference … same for water and fire"): the displacement (each world step turned into the badge's axes as it is then, summed) and the specific force (the accelerometer: gravity plus the badge's own acceleration, low-passed over 30 ms).
 
 Who reads what (`applyMotion`, once a frame: `frameMotion` at the start of `Update`, after the firmware drained the samples; the state itself is still updated every sample):
@@ -95,7 +95,10 @@ Host tests from synthetic 100 Hz traces (`app/motionstate_test.go`):
 - a 45° tilt and back moves nothing;
 - tilted 45°, a stroke along the badge's up axis moves the paddle 1:1 and one along world vertical by cos 45°;
 - a 10 cm move shifts the boids' window 1:1;
-- a shake sloshes the water and stirs the flock.
+- a shake sloshes the water and stirs the flock;
+- a short stroke holds after its pause; a long shake goes back to where it began.
+
+Host tests from the owner's captures (`app/capture_test.go`, `app/testdata/`): after a hard turn the attitude agrees with the accelerometer within 3 s; his hand-held squares show at their size, in their planes, and come back to their start.
 
 ## Status (2026-11-12)
 

@@ -567,3 +567,39 @@ func TestBoidsWindowFollowsAHandMoveSmoothly(t *testing.T) {
 		t.Errorf("the window moved %.1f cells for 1 cm, want %.1f (1:1)", got, want)
 	}
 }
+
+// A short stroke that ends in a pause holds where it went (owner, TG-6 3b:
+// the hybrid): 5 cm up in 0.5 s, then 10 s at rest, and the paddle's
+// displacement stays at 5 cm. A long continuous motion instead goes back to
+// where it began once the badge rests (it can't be integrated with this
+// sensor: see TestOwnersSquaresShowInTheirPlanes).
+func TestShortStrokeHoldsLongMotionRecentres(t *testing.T) {
+	up := [3]float64{0, 0, 1}
+	a, tm := motionApp()
+	d0 := a.motion.disp[1]
+	drive(a, tm, imuRate, func(float64) float64 { return 0 }, stroke(up, 0.05, *tm+0.2, 0.5), nil)
+	end := a.motion.disp[1] - d0
+	drive(a, tm, 10*imuRate, func(float64) float64 { return 0 }, noAcc, nil)
+	if held := a.motion.disp[1] - d0; math.Abs(float64(held-end)) > 0.005 || math.Abs(float64(end)-0.05) > 0.0075 {
+		t.Errorf("5 cm stroke, then 10 s at rest: %.1f cm at its end, %.1f cm after, want 5 and held", end*100, held*100)
+	}
+
+	// 6 s of 1 Hz up and down (4 cm, back to the start each period), read
+	// with 0.05 m/s² of error, as a hand motion's tilt errors give: a plain
+	// integration ends about 0.9 m away
+	a, tm = motionApp()
+	d0 = a.motion.disp[1]
+	t0 := *tm
+	shake := func(t float64) [3]float64 {
+		if t < t0 || t > t0+6 {
+			return [3]float64{}
+		}
+		w := 2 * math.Pi
+		return [3]float64{0, 0, 0.04*w*w*math.Cos(w*(t-t0)) + 0.05}
+	}
+	drive(a, tm, 6*imuRate, func(float64) float64 { return 0 }, shake, nil)
+	drive(a, tm, 8*imuRate, func(float64) float64 { return 0 }, noAcc, nil)
+	if back := a.motion.disp[1] - d0; math.Abs(float64(back)) > 0.01 {
+		t.Errorf("6 s of shaking, then 8 s at rest: %.1f cm from where it began, want back within 1 cm", back*100)
+	}
+}
