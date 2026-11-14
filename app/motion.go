@@ -30,16 +30,6 @@ const (
 	// the specific force the demos feel is low-passed over forceTau (s):
 	// sensor noise off, a shake (a few Hz) kept
 	forceTau = 0.03
-	// while the badge accelerates (world acceleration, gravity off, above
-	// accGate) or turns (faster than turnGate) the filter runs on the gyro
-	// alone: its accelerometer correction takes a push for a tilt, and
-	// during a turn it pulls the attitude a sample behind (it compares the
-	// new reading with the last attitude: 0.4° at 1 rad/s, a few cm of path
-	// per turn). At most gateMax seconds in a row, so a drifted attitude
-	// still corrects
-	accGate  = 0.15 // m/s²: a gentle 10 cm stroke peaks at 0.6
-	turnGate = 0.2  // rad/s
-	gateMax  = 2    // s
 	// the filter has settled when the attitude points along the
 	// accelerometer (within settleAccel across gravity: its direction, not
 	// its size) for settleTime in a row at rest: the strapdown learns
@@ -81,7 +71,6 @@ type motion struct {
 	lastP     [3]float32 // nav.P at the previous sample
 	movesN    int        // the strapdown's moving episodes since the last motion report
 	wasStill  bool       // the last sample was at rest (an episode starts when it leaves rest)
-	gatedFor  float32    // s in a row the filter ran on the gyro alone
 	settleFor float32    // s in a row the attitude has explained the accelerometer at rest
 	settled   bool       // the filter has agreed with the accelerometer at rest once
 	sampleN   int        // samples since the last motion report (console `motion`)
@@ -96,7 +85,7 @@ func newMotion() *motion {
 	}
 	// no integral term (KI 0): learnBias removes the gyro's bias, and an
 	// integral wound up while the filter turns from flat to the badge's pose
-	// kept turning it while the path pauses the accelerometer (gyroOnly)
+	// kept turning it after
 	return &motion{ahrs: ahrs.NewMahony(ahrs.WithKP(kpSettle), ahrs.WithKI(0), ahrs.WithMagnetometer(false)),
 		up: [3]float32{0, 1, 0}, nav: nav, force: [3]float32{0, gravity, 0}}
 }
@@ -117,11 +106,16 @@ func (a *App) SetIMU(acc, gyro [3]float32, dt float32) {
 		gyro[i] -= m.bias[i]
 	}
 	m.lastGyro = gyro
-	in := acc
-	if m.gyroOnly(acc, gyro, dt) {
-		in = [3]float32{} // no accelerometer: the filter's correction pauses
-	}
-	m.in = mat.Matrix3x3{in, gyro, {}}
+	// the accelerometer corrects the tilt on every sample: no gyro-only
+	// gate. Every gate tried held the correction off through hand motion
+	// (it turns at 0.4–1.4 rad/s) and after a flip, and the tilt error then
+	// leaked gravity into the motion; one gated on the force turned into
+	// the world by the filter's own attitude even locked itself (an
+	// attitude error read as acceleration: TG-6 capture 0, still 7° off
+	// after 60 s at rest). The owner's squares close only ungated (TG-6
+	// capture 2).
+	m.settle(dt)
+	m.in = mat.Matrix3x3{acc, gyro, {}}
 	m.ahrs.GainP = kp
 	if !m.settled {
 		m.ahrs.GainP = kpSettle
@@ -230,41 +224,30 @@ func toWorld(q vec.Quaternion, b [3]float32) [3]float32 {
 	}
 }
 
-// gyroOnly reports whether the filter should skip its accelerometer
-// correction for this sample: the badge accelerates beyond gravity (by the
-// filter's attitude so far) or turns; for at most gateMax s in a row. Until
-// the filter has settled it is never true (and it notes when it settles).
-func (m *motion) gyroOnly(acc, gyro [3]float32, dt float32) bool {
-	aw := toWorld(m.ahrs.Output(), acc)
-	aw[2] -= gravity
-	lin2 := aw[0]*aw[0] + aw[1]*aw[1] + aw[2]*aw[2]
-	if !m.settled { // the filter starts flat and turns to the badge's pose: the accelerometer leads
-		// settled when the attitude points along the measured force: its
-		// direction only. An attitude can turn the reading but never change
-		// its size, and an uncalibrated MPU6050 reads 0.1–0.5 m/s² off g at
-		// rest (the badge: 9.7), so a test on the size never passed there
-		// and the path never started
-		fw := toWorld(m.ahrs.Output(), m.force) // low-passed: sensor noise doesn't break the run
-		f2 := fw[0]*fw[0] + fw[1]*fw[1] + fw[2]*fw[2]
-		const tilt = settleAccel / gravity // the largest angle (rad) left between them
-		if m.biasN >= restFirst && m.resting && fw[2] > 0 && fw[0]*fw[0]+fw[1]*fw[1] < tilt*tilt*f2 {
-			m.settleFor += dt
-		} else {
-			m.settleFor = 0
-		}
-		if m.settleFor >= settleTime {
-			m.settled = true
-			m.resetPath() // the path starts here
-		}
-		return false
+// settle notes when the filter has turned from flat to the badge's pose
+// (the path starts there).
+func (m *motion) settle(dt float32) {
+	if m.settled {
+		return
 	}
-	w2 := gyro[0]*gyro[0] + gyro[1]*gyro[1] + gyro[2]*gyro[2]
-	if (lin2 <= accGate*accGate && w2 <= turnGate*turnGate) || m.gatedFor >= gateMax {
-		m.gatedFor = 0
-		return false
+	// the filter starts flat and turns to the badge's pose: settled when the
+	// attitude points along the measured force, its direction only. An
+	// attitude can turn the reading but never change its size, and an
+	// uncalibrated MPU6050 reads 0.1–0.5 m/s² off g at rest (the badge:
+	// 9.7), so a test on the size never passed there and the path never
+	// started
+	fw := toWorld(m.ahrs.Output(), m.force) // low-passed: sensor noise doesn't break the run
+	f2 := fw[0]*fw[0] + fw[1]*fw[1] + fw[2]*fw[2]
+	const tilt = settleAccel / gravity // the largest angle (rad) left between them
+	if m.biasN >= restFirst && m.resting && fw[2] > 0 && fw[0]*fw[0]+fw[1]*fw[1] < tilt*tilt*f2 {
+		m.settleFor += dt
+	} else {
+		m.settleFor = 0
 	}
-	m.gatedFor += dt
-	return true
+	if m.settleFor >= settleTime {
+		m.settled = true
+		m.resetPath() // the path starts here
+	}
 }
 
 // resetPath puts the path's origin where the badge is now (the learnt
