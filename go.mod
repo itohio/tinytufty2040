@@ -21,5 +21,6 @@ replace github.com/itohio/tinygui => ../tinygui
 require github.com/itohio/EasyRobot v0.0.0
 
 // EasyRobot (MPU6050 driver, Mahony, strapdown, flip) is developed next to
-// this repo too; the demo builds against the local checkout.
+// this repo too; the demo builds against the local checkout. Built and
+// verified against EasyRobot 669ca98 (flip's divide-free division).
 replace github.com/itohio/EasyRobot => ../EasyRobot
