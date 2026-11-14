@@ -22,7 +22,7 @@ var (
 		SampleRateDiv:      9, // 1 kHz / 10 = 100 Hz
 		DLPF:               mpu6050.DLPF44Hz,
 		Accel:              mpu6050.Accel2G,
-		Gyro:               mpu6050.Gyro500DPS,
+		Gyro:               mpu6050.Gyro2000DPS, // ±500 clipped a brisk pick-up (TG-6 capture 0); 0.06 °/s a step, far under the rest thresholds
 		DataReadyInterrupt: true,
 	}
 	imuINT = machine.GPIO3
@@ -55,8 +55,10 @@ func setupIMU() bool {
 		return false
 	}
 	mpu = d
+	var gc [1]byte // GYRO_CONFIG read back: FS_SEL in bits 4:3 (3 = ±2000 °/s)
+	_ = mpuRead(regGyroConfig, gc[:])
 	var l console.Line
-	l.S("imu: MPU6050 at 0x68, 100 Hz, DLPF 44 Hz, ±2 g, ±500 °/s: gravity from the tilt").Send(&con)
+	l.S("imu: MPU6050 at 0x68, 100 Hz, DLPF 44 Hz, ±2 g, ±2000 °/s (GYRO_CONFIG").U(uint64(gc[0])).S("): gravity from the tilt").Send(&con)
 	return true
 }
 
@@ -100,15 +102,16 @@ func i2cRecover(sda, scl machine.Pin) {
 // hold 0.85 s. The driver (EasyRobot x/devices/mpu6050) has no FIFO API
 // yet: these registers are read directly on its bus.
 const (
-	mpuAddr      = 0x68
-	regFIFOEn    = 0x23 // FIFO_EN: which outputs go into the FIFO
-	regIntStatus = 0x3A // INT_STATUS: bit 4 FIFO_OFLOW_INT
-	regUserCtrl  = 0x6A // USER_CTRL: bit 6 FIFO_EN, bit 2 FIFO_RESET
-	regFIFOCount = 0x72 // FIFO_COUNT_H, _L
-	regFIFORW    = 0x74 // FIFO_R_W
-	fifoAccGyro  = 0x78 // XG, YG, ZG, ACCEL
-	fifoSample   = 12
-	fifoBatch    = 10 // samples per burst read
+	mpuAddr       = 0x68
+	regGyroConfig = 0x1B // GYRO_CONFIG: FS_SEL in bits 4:3
+	regFIFOEn     = 0x23 // FIFO_EN: which outputs go into the FIFO
+	regIntStatus  = 0x3A // INT_STATUS: bit 4 FIFO_OFLOW_INT
+	regUserCtrl   = 0x6A // USER_CTRL: bit 6 FIFO_EN, bit 2 FIFO_RESET
+	regFIFOCount  = 0x72 // FIFO_COUNT_H, _L
+	regFIFORW     = 0x74 // FIFO_R_W
+	fifoAccGyro   = 0x78 // XG, YG, ZG, ACCEL
+	fifoSample    = 12
+	fifoBatch     = 10 // samples per burst read
 )
 
 var (
