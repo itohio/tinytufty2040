@@ -93,7 +93,9 @@ func (b *badge) SetLED(p int)       { b.led.set(p) }
 func (b *badge) SetBacklight(p int) { b.backlight.set(p) }
 
 // button turns a GPIO into app.Press events. Navigation keys fire on press
-// and auto-repeat as long presses; A/B/C fire on release (held ≥ 500 ms = long).
+// and auto-repeat as long presses, and report their held and released edges
+// (app.Hold: Pong's paddle glides while one is held); A/B/C fire on release
+// (held ≥ 500 ms = long).
 type button struct {
 	pin        machine.Pin
 	id         app.Button
@@ -118,6 +120,7 @@ func (b *button) poll(a *app.App, now time.Time) {
 	case pressed && !b.down:
 		b.down, b.since, b.rep = true, now, now
 		if b.repeat {
+			a.Hold(b.id, true)
 			a.Press(b.id, false)
 		}
 	case pressed && b.down && b.repeat:
@@ -127,7 +130,9 @@ func (b *button) poll(a *app.App, now time.Time) {
 		}
 	case !pressed && b.down:
 		b.down = false
-		if !b.repeat {
+		if b.repeat {
+			a.Hold(b.id, false)
+		} else {
 			a.Press(b.id, now.Sub(b.since) >= holdTime)
 		}
 	}

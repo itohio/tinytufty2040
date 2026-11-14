@@ -101,6 +101,7 @@ type App struct {
 	lightShown             int         // the readout: light %, moving by whole steps
 	usb                    bool
 	presses                [6]int
+	heldSince              [6]time.Time // when each button went down (Hold); zero while up
 	ledOn                  bool
 	ledPct, backlight      int
 	samplePeriod           time.Duration
@@ -297,6 +298,7 @@ func New(d ui.Displayer, hw Hardware, cfg Config, now time.Time) *App {
 // Update advances time-driven state: sensors, animations, idle timeouts and
 // queued commands. Call it once per frame before Draw.
 func (a *App) Update(now time.Time) {
+	dt := min(now.Sub(a.now), 100*time.Millisecond) // this frame's time, for the held buttons
 	a.now = now
 	for {
 		select {
@@ -342,6 +344,13 @@ func (a *App) Update(now time.Time) {
 	if d := a.demoOf[a.cur]; d != nil {
 		d.tick()
 		a.full = d.fullView()
+		if h, ok := d.(holder); ok && a.full != nil {
+			for _, b := range [...]Button{BtnUp, BtnDown} {
+				if t := a.heldSince[b]; !t.IsZero() && now.Sub(t) >= holdGlideAfter && h.holds(b) {
+					h.glide(b, dt)
+				}
+			}
+		}
 	}
 	// the Calibration page: its stage and strips; a result is shown, not
 	// applied (nothing into the shared motion state until strapdown r11)
@@ -450,8 +459,14 @@ func (a *App) Press(b Button, long bool) {
 		a.saver = false
 		return
 	}
-	if a.full != nil && a.demoOf[a.cur].fullPress(b) {
-		return
+	if a.full != nil {
+		d := a.demoOf[a.cur]
+		if h, ok := d.(holder); ok && long && h.holds(b) {
+			return // held: it glides (Update), the repeats don't step it
+		}
+		if d.fullPress(b) {
+			return
+		}
 	}
 	if a.overlay.Top() != nil { // a dialog or list is open: it gets the buttons
 		if cmd, ok := overlayCmd[b]; ok {
@@ -513,6 +528,17 @@ func (a *App) Press(b Button, long bool) {
 			return
 		}
 		p.nav.Back()
+	}
+}
+
+// Hold reports a button going down (true) or up: the badge reports the
+// navigation keys' edges beside their presses, so a full-screen demo can act
+// while one is held (holder).
+func (a *App) Hold(b Button, down bool) {
+	if down {
+		a.heldSince[b] = a.now
+	} else {
+		a.heldSince[b] = time.Time{}
 	}
 }
 

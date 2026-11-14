@@ -1,6 +1,9 @@
 package app
 
-import "testing"
+import (
+	"testing"
+	"time"
+)
 
 func TestPongPaddleReturnsBall(t *testing.T) {
 	p := newPong()
@@ -64,13 +67,78 @@ func TestPongPausedPaddleMovesWithButtons(t *testing.T) {
 	before := p.pad[0]
 	p.fullPress(BtnUp)
 	p.tick()
-	if got, want := p.pad[0], before-6*pongFix; got != want {
-		t.Fatalf("paused, UP: paddle at %.1f cells, want %.1f (6 up, drawn now)", float32(got)/pongFix, float32(want)/pongFix)
+	if got, want := p.pad[0], before-pongTap; got != want {
+		t.Fatalf("paused, UP: paddle at %.1f cells, want %.1f (a tap's step up, drawn now)", float32(got)/pongFix, float32(want)/pongFix)
 	}
 	p.fullPress(BtnA) // resume
 	moved := p.pad[0]
 	p.tick()
 	if d := p.pad[0] - moved; d != 0 {
 		t.Fatalf("on resume the paddle moved %.1f cells by itself", float32(d)/pongFix)
+	}
+}
+
+// The paddle's buttons (owner, TG-6 #4): a tap is a small step; held, the
+// paddle glides at a set speed instead of jumping 6 cells at every
+// auto-repeat. The badge's button sequence: the press, the held edge, after
+// 500 ms a long press every 120 ms, the release.
+func TestPaddleTapStepsAndHoldGlides(t *testing.T) {
+	a := testApp()
+	now := time.Now()
+	frame := func() { now = now.Add(33 * time.Millisecond); a.Update(now) }
+	a.showPage(a.pageIndex("Pong"))
+	a.pong.showFull()
+	frame()
+	if a.full == nil {
+		t.Fatal("Pong not full screen")
+	}
+	p := a.pong
+	p.target = 20 * pongFix // mid-court: room both ways
+	p.anchor(p.target)
+
+	// a tap: down for 100 ms
+	before := p.target
+	a.Hold(BtnUp, true)
+	a.Press(BtnUp, false)
+	for range 3 {
+		frame()
+	}
+	a.Hold(BtnUp, false)
+	frame()
+	if got := float32(before-p.target) / pongFix; got != 2 {
+		t.Fatalf("a tap moved the paddle %.2f cells up, want 2", got)
+	}
+
+	// held for 1 s, with the badge's long repeats
+	before = p.target
+	a.Hold(BtnDown, true)
+	a.Press(BtnDown, false)
+	start := now
+	last, worst := p.target, float32(0)
+	repeats := []time.Duration{500 * time.Millisecond, 620 * time.Millisecond, 740 * time.Millisecond}
+	for now.Sub(start) < time.Second {
+		frame()
+		for len(repeats) > 0 && now.Sub(start) >= repeats[0] {
+			a.Press(BtnDown, true)
+			repeats = repeats[1:]
+		}
+		worst = max(worst, float32(p.target-last)/pongFix)
+		last = p.target
+	}
+	a.Hold(BtnDown, false)
+	frame()
+	moved := float32(p.target-before) / pongFix
+	if worst > 1.5 {
+		t.Errorf("held: the paddle moved %.2f cells in one 33 ms frame, want a glide (at most 1.5)", worst)
+	}
+	if moved < 15 {
+		t.Errorf("held 1 s: the paddle moved %.1f cells down, want at least 15", moved)
+	}
+	stopped := p.target
+	for range 5 {
+		frame()
+	}
+	if p.target != stopped {
+		t.Errorf("released: the paddle kept moving (%.1f cells)", float32(p.target-stopped)/pongFix)
 	}
 }

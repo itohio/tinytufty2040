@@ -219,18 +219,22 @@ func (p *pong) fullView() ui.Widget {
 	return nil
 }
 
-// fullPress: UP/DOWN move your paddle (6 cells per press or repeat), A
+// pongTap is a tap's step and pongGlide the held speed (owner, TG-6 #4: a
+// tap is a small step, held the paddle glides at a set speed): the court's
+// 40 free cells in a second.
+const (
+	pongTap   = 2 * pongFix
+	pongGlide = 40 * pongFix // per second
+)
+
+// fullPress: UP/DOWN step your paddle (pongTap; held, it glides: glide), A
 // pauses, B back to the page, C leaves and changes page.
 func (p *pong) fullPress(b Button) bool {
 	switch b {
 	case BtnUp:
-		p.target = max(p.target-6*pongFix, 0)
-		p.anchor(p.target) // the badge carries on from here
-		p.movePaused()
+		p.moveBy(-pongTap)
 	case BtnDown:
-		p.target = min(p.target+6*pongFix, (pongH-pongPadLen)*pongFix)
-		p.anchor(p.target)
-		p.movePaused()
+		p.moveBy(pongTap)
 	case BtnA:
 		p.paused = !p.paused
 	case BtnB:
@@ -240,6 +244,26 @@ func (p *pong) fullPress(b Button) bool {
 		return false
 	}
 	return true
+}
+
+// holds: UP and DOWN glide the paddle while held (holder).
+func (p *pong) holds(b Button) bool { return b == BtnUp || b == BtnDown }
+
+// glide moves your paddle for dt of a held UP or DOWN at pongGlide.
+func (p *pong) glide(b Button, dt time.Duration) {
+	d := int32(pongGlide * dt.Seconds())
+	if b == BtnUp {
+		d = -d
+	}
+	p.moveBy(d)
+}
+
+// moveBy moves your paddle's target by d (cells·pongFix, down positive)
+// within the court; the badge carries on from there.
+func (p *pong) moveBy(d int32) {
+	p.target = min(max(p.target+d, 0), (pongH-pongPadLen)*pongFix)
+	p.anchor(p.target)
+	p.movePaused()
 }
 
 // movePaused puts your paddle at its target at once while the game is
