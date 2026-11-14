@@ -34,7 +34,7 @@ var setupFuncs = map[string]bool{
 	"newPong": true, "newPongView": true, "App.pagePong": true,
 	"newBoids": true, "newBoidsView": true, "App.pageBoids": true,
 	"newMotion": true, "newOrientView": true, "newMotionDemo": true, "App.pageMotion": true,
-	"newCalibration": true, "App.pageCalib": true, // the Calibration page (TG-3), built once
+	"newCalibration": true, "App.pageCalib": true, "newCalibAdapter": true, // the Calibration page (TG-3), built once
 	"newScope": true, "App.pageScope": true,
 	"newBars": true, "newChip": true, "newDurationLabel": true, "newField": true, "newHeading": true, "newHeadingIn": true,
 	"newScrollbar": true, "newSparkline": true, "newSwatch": true, "newTabBar": true, "still": true,

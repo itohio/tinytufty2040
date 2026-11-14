@@ -58,6 +58,7 @@ func TestPagesDrawFramesWithoutAllocating(t *testing.T) {
 // close; then C walks every page doing its usual interactions (edits, list
 // scrolling, each demo's Full view) and wraps back to Demos.
 var menuRound = []struct{ page, steps string }{
+	{"Calib", "u u a f"}, // A: a calibration started afresh
 	{"Demos", "u u u u u u a f b d a f b d a f b d a f b d a f b d a b b d d d a"},
 	{"Dash", "d d u u"},
 	{"Gauge", "u u u a u a"},
@@ -133,8 +134,8 @@ func TestMenuRoundAllocatesNothing(t *testing.T) {
 	}
 	runtime.ReadMemStats(&ms)
 	n := ms.Mallocs - m0
-	if a.page().name != "Demos" {
-		t.Fatalf("the rounds ended on %s, want Demos", a.page().name)
+	if a.page().name != "Calib" {
+		t.Fatalf("the rounds ended on %s, want Calib", a.page().name)
 	}
 	if runtime.Compiler != "gc" && n != 0 || n/uint64(3*len(presses)) != 0 {
 		t.Fatalf("%d allocations in 3 menu rounds (%d presses)", n, 3*len(presses))

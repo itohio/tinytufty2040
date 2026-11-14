@@ -113,7 +113,8 @@ type App struct {
 	optLabels              []string // the Demos options dialog's labels (first: Pause/Resume all)
 	optDialog, resetDialog *widget.Dialog
 	aboutDialog            *widget.Dialog
-	motion                 *motion // IMU fusion; nil without an IMU
+	motion                 *motion      // IMU fusion; nil without an IMU
+	calib                  *calibration // the Calibration page's calibrator (with an IMU; runs from power-on)
 	// demo models: they outlive their pages (the Demos page's tiles run them)
 	life                   *life
 	water                  *water
@@ -204,6 +205,7 @@ func (a *App) initDemos(cfg Config) {
 		a.motion = newMotion()
 		a.motionDemo = newMotionDemo(a.motion)
 		a.pong.motion = a.motion // your paddle follows the badge up and down
+		a.calib = newCalibration(newCalibAdapter())
 	}
 }
 
@@ -245,6 +247,9 @@ func New(d ui.Displayer, hw Hardware, cfg Config, now time.Time) *App {
 		{"Pong", a.pagePong, a.pong}, {"Boids", a.pageBoids, a.boids},
 	}
 	if cfg.IMU {
+		// the Calibration page first (owner 2026-11-13): the app starts on it;
+		// nothing waits for it
+		defs = append([]pageDef{{"Calib", a.pageCalib, nil}}, defs...)
 		defs = append(defs, pageDef{"Motion", a.pageMotion, a.motionDemo})
 	}
 	names := make([]string, len(defs))
@@ -337,6 +342,11 @@ func (a *App) Update(now time.Time) {
 	if d := a.demoOf[a.cur]; d != nil {
 		d.tick()
 		a.full = d.fullView()
+	}
+	// the Calibration page: its stage and strips; a result is shown, not
+	// applied (nothing into the shared motion state until strapdown r11)
+	if a.calib != nil && a.calib.update(now) {
+		a.log("calibrated")
 	}
 	if a.full != nil {
 		w, h := a.full.Size()
