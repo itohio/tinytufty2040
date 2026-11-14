@@ -24,14 +24,6 @@ const (
 	pongServeVX  = 128
 	pongMaxVX    = 320
 	pongPitch    = 3
-	// your paddle follows the badge's displacement along its own up axis
-	// (motion.disp[1]; owner 2026-11-13: "vertical position in the badge
-	// frame of reference, not real world frame of reference") 1:1 on
-	// the glass (owner 2026-11-13: "move the board up or down and the paddle
-	// move up or down with the same speed and motion"): full screen a cell is
-	// 5 px, 0.6375 mm on the 2.0" panel (320 px across 40.8 mm), so the
-	// paddle's whole travel (40 cells) is 2.55 cm of badge motion
-	pongCellsPerM = 1000 / 0.6375
 )
 
 var pongLevels = []string{"easy", "normal", "hard"}
@@ -80,10 +72,15 @@ type pong struct {
 	fullOn         bool
 	txt            textBuf
 	log            func(string)
+	// cellsPerM: your paddle follows the badge's displacement along its own
+	// up axis (motion.disp[1]; owner 2026-11-13: "vertical position in the
+	// badge frame of reference, not real world frame of reference") at the
+	// shared motion sensitivity (sens.go), in cells per metre
+	cellsPerM float32
 }
 
 func newPong() *pong {
-	p := &pong{level: 1}
+	p := &pong{level: 1, cellsPerM: cellsPerM(sensMM[sensDefault])}
 	p.pad[0] = (pongH - pongPadLen) / 2 * pongFix
 	p.pad[1] = p.pad[0]
 	p.target = p.pad[0]
@@ -196,7 +193,7 @@ func (p *pong) follow() {
 		return
 	}
 	y := m.disp[1]
-	pad := p.anchorPad - int32((y-p.anchorY)*pongCellsPerM*pongFix) // up the screen is -y
+	pad := p.anchorPad - int32((y-p.anchorY)*p.cellsPerM*pongFix) // up the screen is -y
 	if lim := int32((pongH - pongPadLen) * pongFix); pad < 0 || pad > lim {
 		pad = min(max(pad, 0), lim)
 		p.anchor(pad)
@@ -210,6 +207,13 @@ func (p *pong) anchor(pad int32) {
 	if p.motion != nil {
 		p.anchorY = p.motion.disp[1]
 	}
+}
+
+// setScale changes how far your paddle moves per metre of badge motion
+// (cells per metre) from where it is now.
+func (p *pong) setScale(c float32) {
+	p.cellsPerM = c
+	p.anchor(p.target)
 }
 
 func (p *pong) fullView() ui.Widget {

@@ -98,7 +98,7 @@ func TestMotionPathFollowsAPush(t *testing.T) {
 // Full-screen Pong: your paddle follows the badge up and down 1:1 on the
 // glass (owner 2026-11-13: "move the board up or down and the paddle move up
 // or down with the same speed and motion"): the paddle moves by the badge's
-// height change × pongCellsPerM, holds at rest, and at an edge it stops
+// height change at the sensitivity (here 1:1), holds at rest, and at an edge it stops
 // and turns back with the badge at once.
 func TestPongPaddleFollowsTheBadge(t *testing.T) {
 	// 1:1 on the glass, from the panel, not from the code's constant: 320 px
@@ -107,6 +107,7 @@ func TestPongPaddleFollowsTheBadge(t *testing.T) {
 	a := testApp()
 	a.motion = newMotion()
 	a.pong.motion = a.motion
+	a.applySens(glassMM)
 	m, p := a.motion, a.pong
 	upright := [3]float32{0, gravity, 0}
 	sample := func(ay float32) {

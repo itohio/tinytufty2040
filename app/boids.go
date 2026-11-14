@@ -56,10 +56,17 @@ type boids struct {
 	fullOn       bool
 	txt          textBuf
 	log          func(string)
+	// the window's travel in the boids' world per metre the badge moves,
+	// at the shared motion sensitivity (sens.go), and where it was when
+	// that last changed: the box's base then and the badge's displacement
+	unitsPerM  float32
+	anchorBase [2]int32
+	anchorDisp [2]float32
 }
 
 func newBoids() *boids {
-	b := &boids{count: 1}
+	b := &boids{count: 1, unitsPerM: cellsPerM(sensMM[sensDefault]) * boidsFix,
+		anchorBase: [2]int32{boidsW * boidsFix / 2, boidsH * boidsFix / 2}}
 	b.reset()
 	b.grid = newBoidsView(b, boidsW*boidsPitch, boidsH*boidsPitch)
 	b.full = newBoidsView(b, ScreenW, ScreenH)
@@ -237,11 +244,6 @@ func octant(vx, vy int32) uint8 {
 	}
 }
 
-// boidsUnitsPerM is the box's travel in the boids' world per metre the
-// badge moves: 1:1 on the glass (full screen a cell is 5 px, 0.6375 mm on
-// the 2.0" panel), as Pong's paddle.
-const boidsUnitsPerM = 1000 / 0.6375 * boidsFix
-
 // boidsFeel is the velocity a boid gains per tick per m/s² of apparent
 // acceleration (1/256 cell per tick); boidsFeelMin (m/s²) is noise.
 const (
@@ -258,10 +260,18 @@ func (b *boids) turnTo(roll float32) {
 }
 
 // moveTo puts the box where the badge is: right and up (m), the motion
-// state's displacement in the badge's own frame.
+// state's displacement in the badge's own frame, at the sensitivity.
 func (b *boids) moveTo(right, up float32) {
-	b.pose.baseX = boidsW*boidsFix/2 + int32(right*boidsUnitsPerM)
-	b.pose.baseY = boidsH*boidsFix/2 - int32(up*boidsUnitsPerM)
+	b.pose.baseX = b.anchorBase[0] + int32((right-b.anchorDisp[0])*b.unitsPerM)
+	b.pose.baseY = b.anchorBase[1] - int32((up-b.anchorDisp[1])*b.unitsPerM)
+}
+
+// setScale changes the window's travel per metre of badge motion (u, world
+// units) from where it is now, the badge's displacement being right, up.
+func (b *boids) setScale(u, right, up float32) {
+	b.anchorBase = [2]int32{b.pose.baseX, b.pose.baseY}
+	b.anchorDisp = [2]float32{right, up}
+	b.unitsPerM = u
 }
 
 // feel sets the apparent acceleration (screen axes, m/s²) the flock feels

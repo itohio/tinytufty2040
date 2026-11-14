@@ -22,13 +22,13 @@ var helpLines = [...]string{
 	"commands: up|down|a|b|c [long], user <ms>, page <n>",
 	"led <0-100>, bl <10-100>, saver [0|1], solid [0-255]",
 	"stats, tiles, frames, mem, memshow [0|1], light [raw|-1], tilt, motion",
-	"dump, version, help",
+	"sens [2.5|5|10|20|40]: motion sensitivity, 1 px = N mm; dump, version, help",
 }
 
 // Handlers returns the command table for ui.NewCommandStreamMux.
 func (a *App) Handlers() map[string]func([]byte) {
 	m := map[string]func([]byte){}
-	for _, name := range []string{"up", "down", "a", "b", "c", "user", "page", "led", "bl", "saver", "solid", "stats", "tiles", "frames", "mem", "memshow", "light", "tilt", "motion", "dump", "version", "help"} {
+	for _, name := range []string{"up", "down", "a", "b", "c", "user", "page", "led", "bl", "saver", "solid", "stats", "tiles", "frames", "mem", "memshow", "light", "tilt", "motion", "sens", "dump", "version", "help"} {
 		m[name] = func(arg []byte) { a.Command(name, string(arg)) }
 	}
 	return m
@@ -38,6 +38,9 @@ func (a *App) Handlers() map[string]func([]byte) {
 func (a *App) Command(name, arg string) {
 	c := command{name: name, long: arg == "long"}
 	c.arg, c.hasArg = atoi(arg)
+	if name == "sens" && arg != "" { // a choice, 2.5 isn't an int: the index, -1 for none
+		c.arg, c.hasArg = sensArg(arg), true
+	}
 	select {
 	case a.cmds <- c:
 	default: // queue full: drop
@@ -112,6 +115,16 @@ func (a *App) exec(c command) {
 		a.log2("build ", a.cfg.BuildID)
 	case "motion": // the shared motion state as the demos read it (verify2: measurable at rest)
 		a.motionReport()
+	case "sens": // the motion sensitivity: mm of badge motion per px of the paddle and the boids' window
+		switch {
+		case !c.hasArg:
+		case c.arg < 0:
+			a.log("sens: one of 2.5 5 10 20 40 (1 px = that many mm)")
+			return
+		default:
+			a.setSens(c.arg)
+		}
+		a.log2("sens: 1 px = ", sensLabels[a.sens])
 	case "help":
 		for _, l := range helpLines {
 			a.log(l)

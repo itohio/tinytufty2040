@@ -302,10 +302,15 @@ func (a *App) pageMotion() *page {
 		func() bool { return false }, func(bool) { md.fullOn = true; a.log("motion full screen") })
 	reset := widget.NewToggle(44, 12, fontBody, colFG, "HERE", "HERE", colTrack, colTrack,
 		func() bool { return false }, func(bool) { md.track.reset(); a.log("motion path reset") })
+	// the motion sensitivity (sens.go): "1 px  10 mm" reads 1 px = 10 mm
+	sens := widget.NewInteractiveLabelChoice(52, 11, sensLabels,
+		widget.WithLabelChoiceIndex(&a.sens), widget.WithLabelChoiceFont(fontBody), widget.WithLabelChoiceColor(colFG),
+		widget.WithLabelChoiceChange(func(i int, _ string) { a.setSens(i); a.log2("motion: 1 px = ", sensLabels[i]) }))
 	p := a.newPageWith("Motion", layout.VFlow(4, 144),
 		still(md.page),
 		newField("Full", 34, 104, full),
 		newField("Path", 34, 104, reset),
+		newField("1 px", 34, 104, sens),
 		still(a.text(104, func() string {
 			return m.txt[0].reset().str("x ").int(cm(m.pos[0])).str(" y ").int(cm(m.pos[1])).str(" z ").int(cm(m.pos[2])).str(" cm").String()
 		}, colMuted)),

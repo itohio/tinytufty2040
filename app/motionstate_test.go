@@ -80,6 +80,11 @@ func stroke(dir [3]float64, d, t1, T float64) func(t float64) [3]float64 {
 	}
 }
 
+// glassMM is 1:1 on the glass: the panel's mm per px (320 px across 40.8
+// mm). Tests of which frame moves what pin it (applySens): a 1 cm move is
+// then 78 px, enough to see a jump; the shipped sensitivity is in sens.go.
+const glassMM = 40.8 / 320
+
 func motionApp() (*App, *float64) {
 	a := testApp()
 	a.motion = newMotion()
@@ -142,6 +147,7 @@ func TestPaddleFollowsTheBadgesOwnUpAxis(t *testing.T) {
 		{"straight up in the world", func(_, _ [3]float64) [3]float64 { return [3]float64{0, 0, 1} }, d * cellsPerM * math.Cos(math.Pi/4)},
 	} {
 		a, tm := motionApp()
+		a.applySens(glassMM) // which axis moves it, at 1:1
 		p := a.pong
 		t1 := *tm
 		tilt := func(t float64) float64 { return math.Pi / 4 * smooth(t-t1) }
@@ -175,6 +181,7 @@ func TestBoidsWindowMovesInTheBadgesFrame(t *testing.T) {
 		{"along the world's horizontal", func([3]float64) [3]float64 { return [3]float64{1, 0, 0} }, d * 1000 / 0.6375 * math.Cos(math.Pi/4)},
 	} {
 		a, tm := motionApp()
+		a.applySens(glassMM)
 		b := a.boids
 		t1 := *tm
 		drive(a, tm, 3*imuRate, func(t float64) float64 { return math.Pi / 4 * smooth(t-t1) }, noAcc, nil)
@@ -255,11 +262,17 @@ func TestSettlesDespiteAnAccelerometerScaleError(t *testing.T) {
 }
 
 // A shake (the badge thrown left and right, 6 m/s² at 1.5 Hz for 2 s)
-// sloshes the water and stirs the boids; a still badge does neither.
+// sloshes the water and stirs the boids; a still badge does neither. At 1:1
+// on the glass (pinned) the window sweeps its walls through the flock; at
+// the default sensitivity (10 mm per px, TG-6 #6) the same shake moves the
+// window about a cell and only the felt acceleration stirs the flock: its
+// top mean speed rises about 6 % instead of 20 % (an owner decision:
+// a stronger boidsFeel would be a task of its own).
 func TestShakeSloshesWaterAndStirsBoids(t *testing.T) {
 	run := func(shake bool) (slosh, stir float64) {
 		rngState = 2463534242
 		a, tm := motionApp()
+		a.applySens(glassMM)
 		w, b := a.water, a.boids
 		for range 120 { // let the water settle level
 			w.step()
@@ -492,6 +505,7 @@ func TestQuickStrokesRegister(t *testing.T) {
 // 0.45 s) held it still for half a second and then jumped it 78 px at once.
 func TestPaddleFollowsAHandMoveSmoothly(t *testing.T) {
 	a, tm := motionApp()
+	a.applySens(glassMM)
 	p := a.pong
 	p.showFull()
 	p.fullPress(BtnA) // paused: only the badge moves the paddle
@@ -517,7 +531,7 @@ func TestPaddleFollowsAHandMoveSmoothly(t *testing.T) {
 	if maxStep > 25*px {
 		t.Errorf("the paddle jumped %d px in one frame, want ≤ 25 (a smooth follow)", maxStep/px)
 	}
-	if got, want := float64(pad0-p.pad[0])/px, 0.01*pongCellsPerM*5; got < want*0.85 || got > want*1.15 {
+	if got, want := float64(pad0-p.pad[0])/px, 0.01*float64(cellsPerM(glassMM))*fullCellPx; got < want*0.85 || got > want*1.15 {
 		t.Errorf("the paddle moved %.0f px for 1 cm, want %.0f (1:1)", got, want)
 	}
 }
@@ -531,6 +545,7 @@ func TestPaddleFollowsAHandMoveSmoothly(t *testing.T) {
 // the flock.
 func TestBoidsWindowFollowsAHandMoveSmoothly(t *testing.T) {
 	a, tm := motionApp()
+	a.applySens(glassMM)
 	b := a.boids
 	const start, frameS = 0.1, 3.0 / imuRate
 	y0, prev := b.pose.baseY, b.pose.baseY
@@ -563,7 +578,7 @@ func TestBoidsWindowFollowsAHandMoveSmoothly(t *testing.T) {
 	if outside*100 > seen {
 		t.Errorf("%d of %d boid-frames outside the window during the move, want ≤ 1 %%", outside, seen)
 	}
-	if got, want := float64(y0-b.pose.baseY)/boidsFix, 0.01*boidsUnitsPerM/boidsFix; got < want*0.85 || got > want*1.15 {
+	if got, want := float64(y0-b.pose.baseY)/boidsFix, 0.01*float64(cellsPerM(glassMM)); got < want*0.85 || got > want*1.15 {
 		t.Errorf("the window moved %.1f cells for 1 cm, want %.1f (1:1)", got, want)
 	}
 }

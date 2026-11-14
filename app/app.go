@@ -101,6 +101,7 @@ type App struct {
 	lightShown             int         // the readout: light %, moving by whole steps
 	usb                    bool
 	presses                [6]int
+	sens                   int          // the motion sensitivity's choice (sens.go)
 	heldSince              [6]time.Time // when each button went down (Hold); zero while up
 	ledOn                  bool
 	ledPct, backlight      int
@@ -216,6 +217,7 @@ func New(d ui.Displayer, hw Hardware, cfg Config, now time.Time) *App {
 		d: d, hw: hw, cfg: cfg,
 		start: now, now: now, fpsT: now,
 		idleTimeout:  30 * time.Second,
+		sens:         sensDefault, // pong and boids start at it (newPong, newBoids)
 		ledPct:       40,
 		backlight:    80,
 		samplePeriod: 200 * time.Millisecond,
