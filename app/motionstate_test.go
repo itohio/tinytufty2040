@@ -201,22 +201,22 @@ func TestPathViewTurnsWithTheBadge(t *testing.T) {
 	x, _, _ := badgeAxes(0)
 	drive(a, tm, 2*imuRate, func(float64) float64 { return 0 }, stroke(x, 0.05, *tm, 0.7), func(int) { tr.record() })
 	start := fromMM(tr.pts[0])
-	look := func() (int16, int16) {
+	look := func() (float32, float32) {
 		v.setCamera(v.back())
 		v.ox, v.oy, v.f = ScreenW/2, ScreenH/2, pathFocal*ScreenH
 		sx, sy, ok := v.project(start)
 		if !ok {
 			t.Fatal("the path's start is behind the camera")
 		}
-		return sx - v.ox, sy - v.oy
+		return sx - float32(v.ox), sy - float32(v.oy)
 	}
 	if dx, dy := look(); dx > -20 || dy < -5 || dy > 5 {
-		t.Fatalf("upright, 5 cm right of the start: the start drawn at (%+d, %+d) from the centre, want well left, level", dx, dy)
+		t.Fatalf("upright, 5 cm right of the start: the start drawn at (%+.0f, %+.0f) from the centre, want well left, level", dx, dy)
 	}
 	t1 := *tm
 	drive(a, tm, 2*imuRate, func(t float64) float64 { return math.Pi / 2 * smooth(t-t1) }, noAcc, nil)
 	if dx, dy := look(); dy < 20 || dx < -5 || dx > 5 {
-		t.Fatalf("turned 90° clockwise: the start drawn at (%+d, %+d) from the centre, want well below it", dx, dy)
+		t.Fatalf("turned 90° clockwise: the start drawn at (%+.0f, %+.0f) from the centre, want well below it", dx, dy)
 	}
 }
 
