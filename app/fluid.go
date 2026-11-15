@@ -297,3 +297,10 @@ func latticeSplit(gx, gy float32) (dir, alt int, pAlt uint32) {
 	}
 	return int(base+1) & 7, int(base) & 7, uint32((1 - frac) * 256)
 }
+
+func abs32(v int32) int32 {
+	if v < 0 {
+		return -v
+	}
+	return v
+}

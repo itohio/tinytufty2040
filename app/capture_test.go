@@ -120,9 +120,8 @@ func TestAttitudeRecoversAfterATurnAtRest(t *testing.T) {
 // their start (TG-6 capture 2, owner 2026-11-14: screen facing him, three
 // square loops in the horizontal plane, first away from him; three in the
 // screen plane, up, right, down, left; the badge turned screen up; squares
-// in the horizontal plane again, then vertical ones). The paddle and the
-// boids' window read the badge-frame displacement, so it is checked here,
-// in the badge's axes (+X right, +Y up the screen, +Z out of it): the badge
+// in the horizontal plane again, then vertical ones). The badge-frame
+// displacement is checked here, in the badge's axes (+X right, +Y up the screen, +Z out of it): the badge
 // keeps its pose within each window. The strapdown's position ran away
 // instead (metres within seconds: in the hand it never rests).
 func TestOwnersSquaresShowInTheirPlanes(t *testing.T) {

@@ -1,315 +1,400 @@
 package app
 
 import (
-	ui "github.com/itohio/tinygui"
 	"image/color"
 	"math"
 	"time"
 
+	ui "github.com/itohio/tinygui"
 	"github.com/itohio/tinygui/layout"
 	"github.com/itohio/tinygui/widget"
 )
 
-// Boids (Reynolds: separation, alignment, cohesion) in a 64×48-cell box,
-// drawn in real pixels by boidsView. Positions and velocities are fixed
-// point, 1/256 of a cell. Neighbours are found by a plain scan with an early
-// reject on |dx| and |dy|: at most 128 boids, so a spatial grid isn't needed
-// (the step time is shown on the page).
+// Boids fly on the inside of a sphere around the badge, and the badge is the
+// camera at its centre: turning the badge turns the view across the sphere.
+// The view is the badge's attitude only (no position). Each boid is a unit
+// vector on the sphere with a velocity tangent to it (rad/s); separation,
+// alignment and cohesion work by chord distance between neighbours, the
+// velocity is kept tangent and the position renormalised every step. A boid
+// outside the view is pulled back toward the view's direction (it wants to
+// be seen), a boid inside only faintly. The screen shows the sphere around
+// the view direction by gnomonic projection over boidsFOV across. Fixed
+// arrays: no allocation after setup.
 const (
-	boidsW, boidsH = 64, 48
-	boidsFix       = 256
-	boidsMax       = 128
-	boidsPitch     = 3
-	boidsR         = 6 * boidsFix // neighbour radius
-	boidsMargin    = 4 * boidsFix // walls push back inside this margin
-	boidsVMax      = 128
-	boidsVMin      = 56
-	boidsTrail     = 3 // trail palette indices 1..3, heads from 4
-	boidsHist      = 4 // positions kept per boid for the full-resolution trail
+	boidsMax   = 128
+	boidsPitch = 3       // the page's view: 64×48 cells' worth of pixels at this pitch
+	boidsGridW = 64      // the page's view, in cells (boidsPitch px each)
+	boidsGridH = 48      //
+	boidsDT    = 1. / 30 // s per step (one per frame)
+	boidsVMin  = 0.12    // rad/s
+	boidsVMax  = 0.40    // rad/s
+	boidsNear  = 0.14    // rad: neighbours within this see each other (8°)
+	boidsSep   = 0.05    // rad: closer than this they push apart (3°)
+	boidsKSep  = 1.5     // 1/s: separation weight
+	boidsKAli  = 0.6     // 1/s: alignment
+	boidsKCoh  = 0.4     // 1/s: cohesion
+	boidsKOut  = 0.8     // 1/s: the pull toward the view's direction from outside it
+	boidsKIn   = 0.05    // 1/s: … and from inside
+	boidsTrail = 3       // trail palette indices 1..3, heads from 4
+	boidsHist  = 4       // positions kept per boid for the trail
+	boidsHistQ = 127     // the trail's unit vectors as int8 (0.45°: about 2 px at the 60° view)
+	boidsQ     = 1 << 14 // positions and velocities in Q14: the step and the projection are integer (no FPU on the M0+)
+	boidsScrQ  = 1 << 12 // projected points in Q12 of the view's half width
+	boidsOff   = -32768  // a projected point off the view
 )
 
 var (
 	boidsCounts = []string{"32", "64", "128"}
 	boidsN      = [3]int{32, 64, 128}
+	// the view's field across the screen (the projection's width): a choice
+	boidsFOVs      = [...]float32{40, 60, 90}
+	boidsFOVLabels = []string{"40°", "60°", "90°"}
 )
 
 var boidsPalette = []color.RGBA{
 	{14, 14, 22, 255},
 	{22, 34, 46, 255}, {32, 60, 78, 255}, {50, 96, 120, 255}, // trail, fading
-	// heads, one hue per heading octant
+	// heads, one hue per on-screen heading octant
 	{255, 90, 90, 255}, {255, 170, 60, 255}, {240, 240, 80, 255}, {120, 240, 90, 255},
 	{70, 230, 200, 255}, {80, 160, 255, 255}, {160, 110, 255, 255}, {250, 100, 220, 255},
 }
 
 type boids struct {
-	x, y, vx, vy [boidsMax]int32
-	nvx, nvy     [boidsMax]int32
-	hist         [boidsMax][boidsHist][2]int16 // recent positions (ring), from the box centre then (histC): int16 halves the 4 KB, wherever the box goes
-	histC        [boidsHist][2]int32           // the box centre when each history slot was taken
-	feltX, feltY float32                       // the apparent acceleration the flock feels (screen axes, m/s²; feel)
-	histI        int
-	count        int // index into boidsN
-	pose         boxPose
-	stepUS       int64
-	grid, full   *boidsView
-	tiles        [2]*boidsView
-	fullOn       bool
-	txt          textBuf
-	log          func(string)
-	// the window's travel in the boids' world per metre the badge moves,
-	// at the shared motion sensitivity (sens.go), and where it was when
-	// that last changed: the box's base then and the badge's displacement
-	unitsPerM  float32
-	anchorBase [2]int32
-	anchorDisp [2]float32
-	motion     *motion // nil without an IMU: the full view's settling notice
+	p, v   [boidsMax][3]int16 // unit position on the sphere (world: z up) and tangent velocity (rad/s), Q14 (boidsQ)
+	hist   [boidsMax][boidsHist][3]int8
+	histI  int
+	count  int // index into boidsN
+	fov    int // index into boidsFOVs
+	stepUS int64
+	// this frame's camera (camera): the view direction, the screen's right
+	// and up, all world unit vectors, and the projection's scale
+	look, right, up [3]int32 // the camera's axes in the world, Q14
+	tanHalf         int32    // tan of half the field across, Q14
+	// the frame's projection, once per tick (Draw runs once per band):
+	// heads and trail points in Q12 of the view's half width (boidsOff: not
+	// in front), the heading's octant
+	head       [boidsMax][2]int16
+	trail      [boidsMax][boidsHist - 1][2]int16
+	oct        [boidsMax]uint8
+	grid, full *boidsView
+	tiles      [2]*boidsView
+	fullOn     bool
+	txt        textBuf
+	log        func(string)
+	motion     *motion // nil without an IMU: the camera stays put
 }
 
 func newBoids() *boids {
-	b := &boids{count: 1, unitsPerM: cellsPerM(sensMM[sensDefault]) * boidsFix,
-		anchorBase: [2]int32{boidsW * boidsFix / 2, boidsH * boidsFix / 2}}
+	b := &boids{count: 1, fov: 1}
+	b.camera()
 	b.reset()
-	b.grid = newBoidsView(b, boidsW*boidsPitch, boidsH*boidsPitch)
+	b.grid = newBoidsView(b, boidsGridW*boidsPitch, boidsGridH*boidsPitch)
 	b.full = newBoidsView(b, ScreenW, ScreenH)
 	b.tiles = [2]*boidsView{newBoidsView(b, tileW, tileH), newBoidsView(b, 2*tileW, 2*tileH)}
 	return b
 }
 
-func abs32(v int32) int32 {
-	if v < 0 {
-		return -v
+func dot3(a, b [3]float32) float32 { return a[0]*b[0] + a[1]*b[1] + a[2]*b[2] }
+
+func unit3(a [3]float32) [3]float32 {
+	n := float32(math.Sqrt(float64(dot3(a, a))))
+	if n == 0 {
+		return [3]float32{0, 0, 1}
 	}
-	return v
+	return [3]float32{a[0] / n, a[1] / n, a[2] / n}
 }
 
-// limit keeps the speed between boidsVMin and boidsVMax, measured with the
-// octagonal approximation max + 3/8 min (no square root).
-func limit(vx, vy int32) (int32, int32) {
-	ax, ay := abs32(vx), abs32(vy)
-	mag := max(ax, ay) + min(ax, ay)>>2 + min(ax, ay)>>3
-	switch {
-	case mag > boidsVMax:
-		return vx * boidsVMax / mag, vy * boidsVMax / mag
-	case mag < boidsVMin && mag > 0:
-		return vx * boidsVMin / mag, vy * boidsVMin / mag
-	case mag == 0:
-		return boidsVMin, 0
-	}
-	return vx, vy
+// tangent is a with its component along the unit p removed.
+func tangent(a, p [3]float32) [3]float32 {
+	d := dot3(a, p)
+	return [3]float32{a[0] - d*p[0], a[1] - d*p[1], a[2] - d*p[2]}
 }
 
+// pos and vel are boid i's position and velocity as floats (the tests);
+// set stores them (Q14).
+func (b *boids) pos(i int) [3]float32 { return fromQ14(b.p[i]) }
+func (b *boids) vel(i int) [3]float32 { return fromQ14(b.v[i]) }
+func (b *boids) set(i int, p, v [3]float32) {
+	b.p[i], b.v[i] = q14of(toQ14(p)), q14of(toQ14(v))
+}
+
+func floatQ(q [3]int32) [3]float32 {
+	return [3]float32{float32(q[0]) / boidsQ, float32(q[1]) / boidsQ, float32(q[2]) / boidsQ}
+}
+
+func fromQ14(q [3]int16) [3]float32 {
+	return [3]float32{float32(q[0]) / boidsQ, float32(q[1]) / boidsQ, float32(q[2]) / boidsQ}
+}
+
+// toQ14 rounds a float vector to Q14 (setup and the camera, once a frame).
+func toQ14(v [3]float32) (q [3]int32) {
+	for a := range 3 {
+		x := v[a] * boidsQ
+		if x < 0 {
+			x -= 0.5
+		} else {
+			x += 0.5
+		}
+		q[a] = int32(x)
+	}
+	return q
+}
+
+func q14of(v [3]int32) (q [3]int16) {
+	for a := range 3 {
+		q[a] = int16(min(max(v[a], -boidsQ), boidsQ-1))
+	}
+	return q
+}
+
+func wide(q [3]int16) [3]int32 { return [3]int32{int32(q[0]), int32(q[1]), int32(q[2])} }
+
+// the Q14 vector maths: |components| ≤ 2^15, so a dot product (Q28) fits
+// int32
+func dotQ(a, b [3]int32) int32 { return (a[0]*b[0] + a[1]*b[1] + a[2]*b[2]) >> 14 }
+
+func tangentQ(a, p [3]int32) [3]int32 {
+	d := dotQ(a, p)
+	return [3]int32{a[0] - d*p[0]>>14, a[1] - d*p[1]>>14, a[2] - d*p[2]>>14}
+}
+
+func crossQ(a, b [3]int32) [3]int32 {
+	return [3]int32{(a[1]*b[2] - a[2]*b[1]) >> 14, (a[2]*b[0] - a[0]*b[2]) >> 14, (a[0]*b[1] - a[1]*b[0]) >> 14}
+}
+
+// lenQ is |a| in Q14 (an integer square root of the Q28 dot product).
+func lenQ(a [3]int32) int32 { return int32(isqrt(uint32(a[0]*a[0] + a[1]*a[1] + a[2]*a[2]))) }
+
+// scaleTo gives a the length l (Q14); a zero vector stays zero.
+func scaleTo(a [3]int32, l int32) [3]int32 {
+	n := lenQ(a)
+	if n == 0 {
+		return a
+	}
+	return [3]int32{a[0] * l / n, a[1] * l / n, a[2] * l / n}
+}
+
+func isqrt(x uint32) uint32 {
+	var r uint32
+	for bit := uint32(1 << 30); bit != 0; bit >>= 2 {
+		if x >= r+bit {
+			x -= r + bit
+			r = r>>1 + bit
+		} else {
+			r >>= 1
+		}
+	}
+	return r
+}
+
+// camera takes this frame's view from the badge's attitude: it looks along
+// the badge's −Z (into the screen), the screen's right is the badge's +X and
+// its up +Y. Without an IMU, or until the attitude has settled, it looks
+// along the world's −Y.
+func (b *boids) camera() {
+	b.tanHalf = int32(math.Tan(float64(boidsFOVs[b.fov])*math.Pi/360)*boidsQ + 0.5)
+	if m := b.motion; m != nil && m.settled {
+		q := m.ahrs.Output()
+		b.look = toQ14(toWorld(q, [3]float32{0, 0, -1}))
+		b.right = toQ14(toWorld(q, [3]float32{1, 0, 0}))
+		b.up = toQ14(toWorld(q, [3]float32{0, 1, 0}))
+		return
+	}
+	b.look, b.right, b.up = [3]int32{0, -boidsQ, 0}, [3]int32{boidsQ, 0, 0}, [3]int32{0, 0, boidsQ}
+}
+
+// project is p's place on the view (gnomonic: straight lines stay
+// straight) in Q12 of the half width, x right, y up; ok false when p is not
+// in front.
+func (b *boids) project(p [3]int32) (x, y int32, ok bool) {
+	z := dotQ(p, b.look)
+	if z <= boidsQ/20 {
+		return 0, 0, false
+	}
+	zt := z * b.tanHalf >> 14
+	return (dotQ(p, b.right) << 12) / zt, (dotQ(p, b.up) << 12) / zt, true
+}
+
+// inView reports whether p is on the view: no division.
+func (b *boids) inView(p [3]int32) bool {
+	z := dotQ(p, b.look)
+	if z <= boidsQ/20 {
+		return false
+	}
+	zt := z * b.tanHalf >> 14
+	x, y := dotQ(p, b.right), dotQ(p, b.up)
+	zh := zt * boidsGridH / boidsGridW
+	return x > -zt && x < zt && y > -zh && y < zh
+}
+
+// the step's constants in Q14 (lengths, speeds) and Q12 (gains, 1/s),
+// rounded once
+const gainQ = 1 << 12
+
+var (
+	kSepQ  = roundQ(boidsKSep * gainQ)
+	kAliQ  = roundQ(boidsKAli * gainQ)
+	kCohQ  = roundQ(boidsKCoh * gainQ)
+	kOutQ  = roundQ(boidsKOut * gainQ)
+	kInQ   = roundQ(boidsKIn * gainQ)
+	vMaxQ  = roundQ(boidsVMax * boidsQ)
+	vMinQ  = roundQ(boidsVMin * boidsQ)
+	dtQ16  = roundQ(boidsDT * (1 << 16))
+	vMax2Q = vMaxQ * vMaxQ // Q28
+	vMin2Q = vMinQ * vMinQ
+)
+
+// roundQ rounds a positive constant to the nearest integer (math.Round's
+// NaN test doesn't run in TinyGo's init-time interpreter).
+func roundQ(x float64) int32 { return int32(x + 0.5) }
+
+// step moves the flock one boidsDT on the sphere, all in integers (Q14
+// unit vectors; no FPU on the M0+): the neighbours within boidsNear (chord²,
+// a Q28 dot product) align and cohere, those within boidsSep push apart;
+// every boid is pulled toward the view's direction, turning when it heads
+// away; the speed stays within boidsVMin..boidsVMax; one Newton step keeps
+// the position on the sphere (a step moves it at most 0.013 rad).
 func (b *boids) step() {
 	n := boidsN[b.count]
-	const r2 = (boidsR >> 4) * (boidsR >> 4)               // in (1/16 cell)²
-	const sep2 = (2 * boidsFix >> 4) * (2 * boidsFix >> 4) // closer than 2 cells
+	near2 := int32(2 * (1 - math.Cos(boidsNear)) * boidsQ * boidsQ)
+	sep2 := int32(2 * (1 - math.Cos(boidsSep)) * boidsQ * boidsQ)
 	for i := range n {
-		xi, yi := b.x[i], b.y[i]
-		var cnt, sx, sy, svx, svy, px, py int32
+		pi, vi := wide(b.p[i]), wide(b.v[i])
+		var sepF [3]float32
+		var ali, coh [3]int32
+		k := int32(0)
 		for j := range n {
 			if j == i {
 				continue
 			}
-			dx, dy := b.x[j]-xi, b.y[j]-yi
-			if dx > boidsR || dx < -boidsR || dy > boidsR || dy < -boidsR {
+			d0, d1, d2 := pi[0]-int32(b.p[j][0]), pi[1]-int32(b.p[j][1]), pi[2]-int32(b.p[j][2])
+			c2 := d0*d0 + d1*d1 + d2*d2 // chord², Q28
+			if c2 >= near2 {
 				continue
 			}
-			// /16, not >>4: the shift rounds negative offsets away from zero,
-			// so neighbours up and left counted as closer and separation
-			// pushed the whole flock into the top-left corner
-			d2 := (dx/16)*(dx/16) + (dy/16)*(dy/16)
-			if d2 > r2 {
-				continue
-			}
-			cnt++
-			sx += dx
-			sy += dy
-			svx += b.vx[j]
-			svy += b.vy[j]
-			if d2 < sep2 {
-				px -= dx
-				py -= dy
+			k++
+			ali[0] += int32(b.v[j][0])
+			ali[1] += int32(b.v[j][1])
+			ali[2] += int32(b.v[j][2])
+			coh[0] += int32(b.p[j][0])
+			coh[1] += int32(b.p[j][1])
+			coh[2] += int32(b.p[j][2])
+			if c2 < sep2 && c2 > 0 { // close: rare; the push grows as 1/chord², float keeps its range
+				f := float32(sep2) / float32(c2)
+				sepF[0] += float32(d0) * f
+				sepF[1] += float32(d1) * f
+				sepF[2] += float32(d2) * f
 			}
 		}
-		vx, vy := b.vx[i], b.vy[i]
-		// steering divides rather than shifts: >> on a negative value rounds
-		// towards -inf and drifted the whole flock up and left
-		if cnt > 0 {
-			vx += (svx/cnt - vx) / 8 // alignment
-			vy += (svy/cnt - vy) / 8
-			vx += sx / cnt / 64 // cohesion: towards the neighbours' centre
-			vy += sy / cnt / 64
+		var s [3]int32 // the steering, Q14 per s
+		if k > 0 {
+			sep := q14clamp(sepF)
+			for a := range 3 {
+				s[a] = (kSepQ*sep[a] + kAliQ*(ali[a]/k-vi[a]) + kCohQ*(coh[a]/k-pi[a])) >> 12
+			}
 		}
-		vx += px / 8 // separation
-		vy += py / 8
-		b.nvx[i], b.nvy[i] = limit(vx, vy)
+		// the pull toward the view's direction: the boid wants to be seen.
+		// Heading away, it turns (a pull straight back would only slow it to
+		// boidsVMin, and the speed limit keeps a velocity from passing
+		// through zero): sideways, toward the side the view is on
+		kv := kInQ
+		if !b.inView(pi) {
+			kv = kOutQ
+		}
+		pull := tangentQ([3]int32{b.look[0] - pi[0], b.look[1] - pi[1], b.look[2] - pi[2]}, pi)
+		for a := range 3 {
+			s[a] += kv * pull[a] >> 12
+		}
+		if dotQ(vi, pull) < 0 {
+			side := crossQ(pi, scaleTo(vi, boidsQ)) // tangent, across the heading
+			if dotQ(side, pull) < 0 {
+				side = [3]int32{-side[0], -side[1], -side[2]}
+			}
+			kl := kv * lenQ(pull) >> 14 // Q12
+			for a := range 3 {
+				s[a] += kl * side[a] >> 12
+			}
+		}
+		// the velocity is steered in place: later boids see it already
+		// steered, which flocking doesn't mind; the positions all move after
+		acc := tangentQ(s, pi)
+		for a := range 3 {
+			vi[a] += acc[a] * dtQ16 >> 16
+		}
+		b.v[i] = q14of(tangentQ(vi, pi))
 	}
-	// move in the world, then meet the box's walls (walls): a boid past one
-	// turns inwards (the minimum speed would otherwise undo the push for a
-	// boid flying straight at a wall), carried by the wall or gliding back.
 	for i := range n {
-		b.vx[i], b.vy[i] = b.nvx[i], b.nvy[i]
-		b.x[i] += b.vx[i]
-		b.y[i] += b.vy[i]
-		b.walls(i)
+		p, v := wide(b.p[i]), wide(b.v[i])
+		switch sp2 := v[0]*v[0] + v[1]*v[1] + v[2]*v[2]; {
+		case sp2 > vMax2Q:
+			v = scaleTo(v, vMaxQ)
+		case sp2 == 0:
+			v = scaleTo(tangentQ(b.right, p), vMinQ)
+		case sp2 < vMin2Q:
+			v = scaleTo(v, vMinQ)
+		}
+		var q [3]int32
+		for a := range 3 {
+			q[a] = p[a] + v[a]*dtQ16>>16
+		}
+		// back onto the sphere: q·(3 − |q|²)/2, the factor in Q16
+		f := (3<<28 - (q[0]*q[0] + q[1]*q[1] + q[2]*q[2])) >> 13
+		for a := range 3 {
+			q[a] = q[a] * f >> 16
+		}
+		b.p[i], b.v[i] = q14of(q), q14of(tangentQ(v, q))
 	}
 }
 
-// boidsCarry is how far past a wall (per axis) the wall still carries a boid
-// (puts it on the wall): a boid's own flight in a tick (0.5 cell) plus a
-// shake or a turn of the box (about a cell a tick). Farther out, the window has outrun the
-// boid (a hand stroke: up to 44 cells a tick, TG-6 #5a): it is left outside
-// and glides back, 1/boidsReturn of the way to the wall each tick.
-const (
-	boidsCarry  = 3 * boidsFix / 2
-	boidsReturn = 6
-)
-
-// walls applies the box's walls to boid i. A boid near a wall is pushed
-// inwards. One past it turns inwards; the wall carries it if it is just
-// past, otherwise it glides back. Never reflected across: a boid the window
-// left 40 cells behind used to land 40 cells inside, a jump across the
-// window (the owner's "they jump around"). Only boids a wall touches are
-// converted back, so the others keep their world heading.
-func (b *boids) walls(i int) {
-	const push = 16
-	const hiX, hiY = boidsW*boidsFix - 1, boidsH*boidsFix - 1
-	p := &b.pose
-	bx, by := p.toBox(b.x[i], b.y[i])
-	near := bx < boidsMargin || bx > hiX-boidsMargin || by < boidsMargin || by > hiY-boidsMargin
-	if !near {
-		return
+// q14clamp turns the separation's float sum into Q14 (a sum of chords
+// times sep²/chord²: kept to ±2).
+func q14clamp(v [3]float32) (q [3]int32) {
+	for a := range 3 {
+		q[a] = int32(min(max(v[a], -2*boidsQ), 2*boidsQ))
 	}
-	vx, vy := p.vecToBox(b.vx[i], b.vy[i])
-	switch {
-	case bx < boidsMargin:
-		vx += push
-	case bx > hiX-boidsMargin:
-		vx -= push
-	}
-	switch {
-	case by < boidsMargin:
-		vy += push
-	case by > hiY-boidsMargin:
-		vy -= push
-	}
-	nx, vx := wall(bx, vx, hiX)
-	ny, vy := wall(by, vy, hiY)
-	if nx != bx || ny != by {
-		b.x[i], b.y[i] = p.toWorld(nx, ny)
-	}
-	b.vx[i], b.vy[i] = limit(p.vecToWorld(vx, vy))
+	return q
 }
 
-// wall meets one axis's walls (0 and hi, box units): a boid past one turns
-// inwards; just past (boidsCarry) the wall carries it, farther it glides
-// back a part of the way.
-func wall(p, v, hi int32) (int32, int32) {
-	var over int32 // how far past the wall, signed outwards
-	switch {
-	case p < 0:
-		over, v = p, abs32(v)
-	case p > hi:
-		over, v = p-hi, -abs32(v)
-	default:
-		return p, v
-	}
-	if abs32(over) <= boidsCarry {
-		return p - over, v
-	}
-	return p - over/boidsReturn, v
-}
-
-// octant of a heading: 0 east, counting clockwise on screen (y down).
-func octant(vx, vy int32) uint8 {
-	ax, ay := abs32(vx), abs32(vy)
-	// steep / shallow / diagonal by the tan(22.5°) ≈ 0.414 ≈ 106/256 ratio
-	var o uint8
-	switch {
-	case ay*256 < ax*106:
-		o = 0 // horizontal
-	case ax*256 < ay*106:
-		o = 2 // vertical
-	default:
-		o = 1 // diagonal
-	}
-	// map to the 8 directions by signs
-	switch {
-	case vx >= 0 && vy >= 0:
-		return o // 0 E, 1 SE, 2 S
-	case vx < 0 && vy >= 0:
-		return 4 - o // 4 W, 3 SW, 2 S
-	case vx < 0 && vy < 0:
-		return (4 + o) & 7 // 4 W, 5 NW, 6 N
-	default:
-		return (8 - o) & 7 // 0 E, 7 NE, 6 N
-	}
-}
-
-// boidsFeel is the velocity a boid gains per tick per m/s² of apparent
-// acceleration (1/256 cell per tick); boidsFeelMin (m/s²) is noise.
-const (
-	boidsFeel    = 4
-	boidsFeelMin = 0.5
-)
-
-// turnTo turns the box (the window) to the badge's roll (radians,
-// clockwise as the viewer sees it): from the motion state's attitude.
-func (b *boids) turnTo(roll float32) {
-	d := roll - b.pose.angle
-	d -= 2 * math.Pi * float32(math.Round(float64(d/(2*math.Pi))))
-	b.pose.setAngle(b.pose.angle + d)
-}
-
-// moveTo puts the box where the badge is: right and up (m), the motion
-// state's displacement in the badge's own frame, at the sensitivity.
-func (b *boids) moveTo(right, up float32) {
-	b.pose.baseX = b.anchorBase[0] + int32((right-b.anchorDisp[0])*b.unitsPerM)
-	b.pose.baseY = b.anchorBase[1] - int32((up-b.anchorDisp[1])*b.unitsPerM)
-}
-
-// setScale changes the window's travel per metre of badge motion (u, world
-// units) from where it is now, the badge's displacement being right, up.
-func (b *boids) setScale(u, right, up float32) {
-	b.anchorBase = [2]int32{b.pose.baseX, b.pose.baseY}
-	b.anchorDisp = [2]float32{right, up}
-	b.unitsPerM = u
-}
-
-// feel sets the apparent acceleration (screen axes, m/s²) the flock feels
-// from the badge's own acceleration: a shake stirs it.
-func (b *boids) feel(ax, ay float32) { b.feltX, b.feltY = ax, ay }
-
-// push gives every boid the velocity the felt acceleration adds this tick.
-func (b *boids) push() {
-	ax, ay := b.feltX, b.feltY
-	if ax*ax+ay*ay < boidsFeelMin*boidsFeelMin {
-		return
-	}
-	vx, vy := b.pose.vecToWorld(int32(ax*boidsFeel), int32(ay*boidsFeel))
+// frame projects the flock for Draw, once per tick: the heads, the trail
+// points and the heading's octant.
+func (b *boids) frame() {
 	for i := range boidsN[b.count] {
-		b.vx[i], b.vy[i] = limit(b.vx[i]+vx, b.vy[i]+vy)
+		p, v := wide(b.p[i]), wide(b.v[i])
+		b.head[i] = b.scr(p)
+		// the heading on screen: where the boid will be shortly
+		ahead := [3]int32{p[0] + v[0]/5, p[1] + v[1]/5, p[2] + v[2]/5}
+		if h := b.scr(ahead); b.head[i][0] != boidsOff && h[0] != boidsOff {
+			b.oct[i] = octant(float32(h[0]-b.head[i][0]), float32(b.head[i][1]-h[1]))
+		}
+		for k := 1; k < boidsHist; k++ {
+			slot := (b.histI - 1 - k + 2*boidsHist) % boidsHist
+			hq := b.hist[i][slot]
+			b.trail[i][k-1] = b.scr([3]int32{int32(hq[0]) * boidsQ / boidsHistQ, int32(hq[1]) * boidsQ / boidsHistQ, int32(hq[2]) * boidsQ / boidsHistQ})
+		}
 	}
+}
+
+// scr is p projected, Q12 of the half width (y up), or boidsOff.
+func (b *boids) scr(p [3]int32) [2]int16 {
+	x, y, ok := b.project(p)
+	if !ok || x <= -2*boidsScrQ || x >= 2*boidsScrQ || y <= -2*boidsScrQ || y >= 2*boidsScrQ {
+		return [2]int16{boidsOff, boidsOff}
+	}
+	return [2]int16{int16(x), int16(y)}
 }
 
 func (b *boids) tick() {
 	t0 := time.Now()
-	b.pose.advance()
-	b.push()
+	b.camera()
 	b.step()
-	cx, cy := b.pose.cx, b.pose.cy
-	b.histC[b.histI] = [2]int32{cx, cy}
 	for i := range boidsN[b.count] {
-		b.hist[i][b.histI] = histPoint(b.x[i]-cx, b.y[i]-cy)
+		for a := range 3 {
+			b.hist[i][b.histI][a] = int8(int32(b.p[i][a]) * boidsHistQ / boidsQ)
+		}
 	}
 	b.histI = (b.histI + 1) % boidsHist
+	b.frame()
 	b.stepUS = time.Since(t0).Microseconds()
-}
-
-// histPoint is a trail point relative to the box centre, saturated to
-// int16: a boid the window left behind may be farther than int16 holds
-// (128 cells), and a wrapped point would show inside the window.
-func histPoint(dx, dy int32) [2]int16 {
-	return [2]int16{int16(min(max(dx, math.MinInt16), math.MaxInt16)), int16(min(max(dy, math.MinInt16), math.MaxInt16))}
 }
 
 func (b *boids) fullView() ui.Widget {
@@ -319,18 +404,12 @@ func (b *boids) fullView() ui.Widget {
 	return nil
 }
 
-// fullPress: UP/DOWN turn the box 22.5° (the walls sweep through the
-// flock), A shakes it, B back to the page, C leaves and changes page.
+// fullPress: A gathers the flock into the view, B back to the page, C
+// leaves and changes page.
 func (b *boids) fullPress(btn Button) bool {
 	switch btn {
-	case BtnUp:
-		b.pose.target += boxTurnStep
-		b.log("box turns")
-	case BtnDown:
-		b.pose.target -= boxTurnStep
-		b.log("box turns")
 	case BtnA:
-		b.pose.shake()
+		b.gather()
 	case BtnB:
 		b.fullOn = false
 	case BtnC:
@@ -340,10 +419,15 @@ func (b *boids) fullPress(btn Button) bool {
 	return true
 }
 
-// scatter sends every boid away from the box's centre at top speed.
+// randIn is a random number in [−1, 1).
+func randIn() float32 { return float32(rand32()%2048)/1024 - 1 }
+
+// scatter sends every boid away from the view's direction at top speed.
 func (b *boids) scatter() {
 	for i := range boidsN[b.count] {
-		b.vx[i], b.vy[i] = limit(b.x[i]-b.pose.cx, b.y[i]-b.pose.cy)
+		p, look := b.pos(i), floatQ(b.look)
+		d := unit3(tangent([3]float32{p[0] - look[0], p[1] - look[1], p[2] - look[2]}, p))
+		b.set(i, p, [3]float32{d[0] * boidsVMax, d[1] * boidsVMax, d[2] * boidsVMax})
 	}
 }
 
@@ -351,8 +435,8 @@ func (a *App) pageBoids() *page {
 	b := a.boids
 	count := widget.NewInteractiveLabelChoice(52, 11, boidsCounts,
 		widget.WithLabelChoiceIndex(&b.count), widget.WithLabelChoiceFont(fontBody), widget.WithLabelChoiceColor(colFG))
-	spin := widget.NewToggle(44, 12, fontBody, colFG, "ON", "OFF", colGood, colTrack,
-		func() bool { return b.pose.spin }, func(v bool) { b.pose.spin = v })
+	fov := widget.NewInteractiveLabelChoice(52, 11, boidsFOVLabels,
+		widget.WithLabelChoiceIndex(&b.fov), widget.WithLabelChoiceFont(fontBody), widget.WithLabelChoiceColor(colFG))
 	full := widget.NewToggle(44, 12, fontBody, colFG, "SHOW", "SHOW", colTrack, colTrack,
 		func() bool { return false }, func(bool) { b.fullOn = true; a.log("boids full screen") })
 	gather := widget.NewToggle(44, 12, fontBody, colFG, "GO", "GO", colTrack, colTrack,
@@ -360,12 +444,12 @@ func (a *App) pageBoids() *page {
 	scatter := widget.NewToggle(44, 12, fontBody, colFG, "GO", "GO", colTrack, colTrack,
 		func() bool { return false }, func(bool) { b.scatter(); a.log("boids scatter") })
 	// explicit height: findings F-33
-	p := a.newPageWith("Boids", layout.VFlow(4, boidsH*boidsPitch),
+	p := a.newPageWith("Boids", layout.VFlow(4, boidsGridH*boidsPitch),
 		still(b.grid),
 		newField("Boids", 42, 104, count),
+		newField("View", 42, 104, fov),
 		newField("Gather", 42, 104, gather),
 		newField("Scatter", 42, 104, scatter),
-		newField("Spin", 42, 104, spin),
 		newField("Full", 42, 104, full),
 		still(a.text(104, func() string { return b.txt.reset().str("step ").int(int(b.stepUS)).str(" us").String() }, colMuted)),
 	)
@@ -376,26 +460,25 @@ func (a *App) pageBoids() *page {
 func (b *boids) tileViews() (ui.Widget, ui.Widget) { return b.tiles[0], b.tiles[1] }
 func (b *boids) showFull()                         { b.fullOn = true }
 
-// reset straightens the box at the world's centre and gathers the flock
-// into it.
-func (b *boids) reset() {
-	b.pose = newBoxPose()
-	b.gather()
-}
+// reset gathers the flock into the view.
+func (b *boids) reset() { b.gather() }
 
-// gather puts every boid at a random place and heading inside the window
-// where it is now, moved and turned (owner, TG-6 #5: a control that resets
-// the flock into the window), with no trail.
+// gather puts every boid at a random place inside the view and a random
+// heading along the sphere, with no trail.
 func (b *boids) gather() {
+	b.camera()
+	look, right, up := floatQ(b.look), floatQ(b.right), floatQ(b.up)
+	th := float32(b.tanHalf) / boidsQ
 	for i := range boidsMax {
-		b.x[i], b.y[i] = b.pose.toWorld(int32(rand32()%(boidsW*boidsFix)), int32(rand32()%(boidsH*boidsFix)))
-		b.vx[i] = int32(rand32()%(2*boidsVMax)) - boidsVMax
-		b.vy[i] = int32(rand32()%(2*boidsVMax)) - boidsVMax
-	}
-	for k := range boidsHist { // every history slot is now
-		b.histC[k] = [2]int32{b.pose.cx, b.pose.cy}
-		for i := range boidsMax {
-			b.hist[i][k] = histPoint(b.x[i]-b.pose.cx, b.y[i]-b.pose.cy)
+		x, y := randIn()*th, randIn()*th*boidsGridH/boidsGridW
+		p := unit3([3]float32{look[0] + x*right[0] + y*up[0], look[1] + x*right[1] + y*up[1], look[2] + x*right[2] + y*up[2]})
+		d := unit3(tangent([3]float32{randIn(), randIn(), randIn()}, p))
+		sp := boidsVMin + (boidsVMax-boidsVMin)*(randIn()+1)/2
+		b.set(i, p, [3]float32{d[0] * sp, d[1] * sp, d[2] * sp})
+		for k := range boidsHist {
+			for a := range 3 {
+				b.hist[i][k][a] = int8(int32(b.p[i][a]) * boidsHistQ / boidsQ)
+			}
 		}
 	}
 }

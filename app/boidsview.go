@@ -6,11 +6,11 @@ import (
 	ui "github.com/itohio/tinygui"
 )
 
-// boidsView draws the flock at full resolution (owner: "boids and paddles -
-// full resolution!!!"): each boid at its exact position (1/256 cell scaled
-// to pixels), a 3×3 head coloured by its on-screen heading with a nose
-// pixel, and a fading trail of its last positions. Any size: the page,
-// full screen and the menu tiles.
+// boidsView draws the flock as the badge sees it (boids.project): each boid
+// at its projected position, a 3×3 head coloured by its on-screen heading
+// with a nose pixel, and a fading trail of its last positions. Any size: the
+// page, full screen and the menu tiles; the field across is boidsFOV
+// whatever the size.
 type boidsView struct {
 	ui.WidgetBase
 	b *boids
@@ -25,38 +25,72 @@ var boidNose = [8][2]int16{{2, 0}, {2, 2}, {0, 2}, {-2, 2}, {-2, 0}, {-2, -2}, {
 
 var boidsViewBG = color.RGBA{8, 9, 14, 255}
 
+// octant is the heading octant of a screen-space direction (dx right, dy
+// down), 0 east, clockwise.
+func octant(dx, dy float32) uint8 {
+	ax, ay := dx, dy
+	if ax < 0 {
+		ax = -ax
+	}
+	if ay < 0 {
+		ay = -ay
+	}
+	var o uint8
+	switch {
+	case ax > 2.414*ay: // within 22.5° of horizontal
+		o = 0
+	case ay > 2.414*ax:
+		o = 2
+	default:
+		o = 1
+	}
+	switch {
+	case dx >= 0 && dy >= 0:
+		return o
+	case dx < 0 && dy >= 0:
+		return 4 - o
+	case dx < 0:
+		return 4 + o
+	}
+	return (8 - o) % 8
+}
+
 func (v *boidsView) Draw(ctx ui.Context) {
 	d := ctx.D()
 	x0, y0 := ctx.DisplayPos()
-	w, h := int32(v.Width), int16(v.Height)
-	fillRect(d, x0, y0, int16(w), h, boidsViewBG)
+	fillRect(d, x0, y0, int16(v.Width), int16(v.Height), boidsViewBG)
 	b := v.b
 	if v == b.full {
-		drawSettling(d, b.motion, x0, y0, int16(w), h)
+		drawSettling(d, b.motion, x0, y0, int16(v.Width), int16(v.Height))
 	}
-	const span = boidsW * boidsFix // world units across the box; pixels = units·w/span on both axes
+	// the frame's projection (boids.frame, once per tick): only scaling here
+	cx, cy, s := int32(x0)+int32(v.Width)/2, int32(y0)+int32(v.Height)/2, int32(v.Width)/2
+	lx, ly, hx0, hy0 := int32(x0), int32(y0), int32(x0)+int32(v.Width)-2, int32(y0)+int32(v.Height)-2 // the heads' room
 	n := boidsN[b.count]
 	for k := 1; k < boidsHist; k++ { // trails, oldest dimmest
 		c := boidsPalette[boidsTrail+1-k*boidsTrail/boidsHist]
-		slot := (b.histI - 1 - k + 2*boidsHist) % boidsHist
 		for i := range n {
-			hc := b.histC[slot]
-			bx, by := b.pose.toBox(int32(b.hist[i][slot][0])+hc[0], int32(b.hist[i][slot][1])+hc[1])
-			if bx < 0 || by < 0 || bx >= span || by >= boidsH*boidsFix {
+			t := b.trail[i][k-1]
+			if t[0] == boidsOff {
 				continue
 			}
-			fillRect(d, x0+int16(bx*w/span), y0+int16(by*w/span), 2, 2, c)
+			if x, y := cx+int32(t[0])*s>>12, cy-int32(t[1])*s>>12; x >= lx && y >= ly && x < hx0 && y < hy0 {
+				fillRect(d, int16(x), int16(y), 2, 2, c)
+			}
 		}
 	}
 	for i := range n {
-		bx, by := b.pose.toBox(b.x[i], b.y[i])
-		if bx < 0 || by < 0 || bx >= span || by >= boidsH*boidsFix {
-			continue // left outside by the window, gliding back (walls)
+		h := b.head[i]
+		if h[0] == boidsOff {
+			continue
 		}
-		o := octant(b.pose.vecToBox(b.vx[i], b.vy[i]))
+		x, y := cx+int32(h[0])*s>>12, cy-int32(h[1])*s>>12
+		if x-1 < lx || y-1 < ly || x-1 >= hx0 || y-1 >= hy0 {
+			continue // out of view: it's on its way back
+		}
+		o := b.oct[i]
 		c := boidsPalette[boidsTrail+1+o]
-		x, y := x0+int16(bx*w/span), y0+int16(by*w/span)
-		fillRect(d, x-1, y-1, 3, 3, c)
-		fillRect(d, x+boidNose[o][0], y+boidNose[o][1], 1, 1, c)
+		fillRect(d, int16(x)-1, int16(y)-1, 3, 3, c)
+		fillRect(d, int16(x)+boidNose[o][0], int16(y)+boidNose[o][1], 1, 1, c)
 	}
 }

@@ -24,14 +24,13 @@ var helpLines = [...]string{
 	"led <0-100>, bl <10-100>, saver [0|1], solid [0-255]",
 	"stats, tiles, frames, mem, memshow [0|1]",
 	"light [raw|-1], tilt, motion, dump, version, help",
-	"sens [1:1|2.5|5|10|20|40]: 1 px = N mm of motion",
 	"cal [clear | set ox oy oz sx sy sz gx gy gz]: the fit",
 }
 
 // Handlers returns the command table for ui.NewCommandStreamMux.
 func (a *App) Handlers() map[string]func([]byte) {
 	m := map[string]func([]byte){}
-	for _, name := range []string{"up", "down", "a", "b", "c", "user", "page", "led", "bl", "saver", "solid", "stats", "tiles", "frames", "mem", "memshow", "light", "tilt", "motion", "sens", "dump", "version", "help", "cal"} {
+	for _, name := range []string{"up", "down", "a", "b", "c", "user", "page", "led", "bl", "saver", "solid", "stats", "tiles", "frames", "mem", "memshow", "light", "tilt", "motion", "dump", "version", "help", "cal"} {
 		m[name] = func(arg []byte) { a.Command(name, string(arg)) }
 	}
 	return m
@@ -41,9 +40,6 @@ func (a *App) Handlers() map[string]func([]byte) {
 func (a *App) Command(name, arg string) {
 	c := command{name: name, text: arg, long: arg == "long"}
 	c.arg, c.hasArg = atoi(arg)
-	if name == "sens" && arg != "" { // a choice, 2.5 isn't an int: the index, -1 for none
-		c.arg, c.hasArg = sensArg(arg), true
-	}
 	select {
 	case a.cmds <- c:
 	default: // queue full: drop
@@ -122,16 +118,6 @@ func (a *App) exec(c command) {
 		a.log2("build ", a.cfg.BuildID)
 	case "motion": // the shared motion state as the demos read it (measurable at rest)
 		a.motionReport()
-	case "sens": // the motion sensitivity: mm of badge motion per px of the paddle and the boids' window
-		switch {
-		case !c.hasArg:
-		case c.arg < 0:
-			a.log("sens: one of 1:1 2.5 5 10 20 40 (mm per px)")
-			return
-		default:
-			a.setSens(c.arg)
-		}
-		a.logSens("sens: ")
 	case "help":
 		for _, l := range helpLines {
 			a.log(l)
@@ -231,8 +217,7 @@ func (a *App) logTilt() {
 // motionReport logs the shared motion state the demos read: the world
 // position and the badge-frame displacement in µm (the Motion page shows
 // whole cm; the paddle moves 0.13 mm a pixel), how many samples the strapdown called rest since the last
-// report, and what moves on screen: Pong's paddle row (px) and the boids'
-// window offset (tenths of a cell).
+// report, and what moves on screen: Pong's paddle row (px).
 func (a *App) motionReport() {
 	m := a.motion
 	if m == nil {
@@ -246,10 +231,8 @@ func (a *App) motionReport() {
 	if m.sampleN > 0 {
 		rest = m.restN * 100 / m.sampleN
 	}
-	b := a.boids
 	a.log(a.txtStat.reset().str("rest ").int(rest).str("% of ").int(m.sampleN).str(" settled ").int(btoi(m.settled)).
 		str(" pad ").int(int(a.pong.pad[0] / (pongFix / 5))).
-		str(" win ").int(int((b.pose.baseX - boidsW*boidsFix/2) * 10 / boidsFix)).str(" ").int(int((b.pose.baseY - boidsH*boidsFix/2) * 10 / boidsFix)).
 		str(" moves ").int(m.movesN).String())
 	m.sampleN, m.restN, m.movesN = 0, 0, 0
 }

@@ -229,9 +229,7 @@ func (a *App) frameMotion() {
 // its own integration.
 //   - Water and Fire's fuel feel the specific force in the screen's frame:
 //     things fall along it, so a tilt and a shake both move them.
-//   - The boids' box (the window into their world) turns with the attitude
-//     and moves with the displacement in the badge's own frame; the boids
-//     feel the badge's own acceleration (a shake stirs them).
+//   - Boids look through the badge's attitude (boids.camera reads it).
 //   - Pong's paddle follows the displacement along the badge's own up axis
 //     (pong.follow reads disp).
 //   - The Motion page's path is the shown world position, seen from the
@@ -241,25 +239,6 @@ func (a *App) applyMotion() {
 	// screen x right = +X, y down = −Y; things fall against the specific force
 	gx, gy := -m.force[0], m.force[1]
 	a.SetTilt(gx, gy)
-	if b := a.boids; b != nil {
-		// the box's roll from the attitude (not the force: a shake doesn't
-		// turn the window)
-		if ux, uy := -m.up[0], m.up[1]; ux*ux+uy*uy > (minTilt/gravity)*(minTilt/gravity) {
-			b.turnTo(float32(math.Atan2(float64(ux), float64(uy))))
-		}
-		// the window moves in the badge's own frame, as the paddle (owner
-		// 2026-11-13: "boids window - also badge frame of reference")
-		b.moveTo(m.disp[0], m.disp[1])
-		// the badge's own acceleration in the screen's frame: the force
-		// minus the gravity the attitude expects; nothing until the
-		// attitude has settled (at power-on it starts flat, and the
-		// difference pushed the flock with 9 m/s²)
-		if m.settled {
-			b.feel(gx+m.up[0]*gravity, gy-m.up[1]*gravity)
-		} else {
-			b.feel(0, 0)
-		}
-	}
 }
 
 // toBadge turns a world vector into the badge's frame (the inverse of

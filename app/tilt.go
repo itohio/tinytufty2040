@@ -1,7 +1,5 @@
 package app
 
-import "math"
-
 // tilter is a demo that follows the badge's tilt from a motion sensor:
 // gravity in screen axes (x right, y down, m/s²), at full precision.
 type tilter interface{ tilt(gx, gy float32) }
@@ -68,13 +66,4 @@ func (f *fire) tilt(gx, gy float32) {
 	if !f.pinned {
 		f.setTilt(gx, gy)
 	}
-}
-
-// tilt turns the boids' box by the badge's roll (the walls move, the flock
-// keeps its world heading): exactly, from the shortest way round.
-func (b *boids) tilt(gx, gy float32) {
-	roll := float32(math.Atan2(float64(gx), float64(gy)))
-	d := roll - b.pose.angle
-	d -= 2 * math.Pi * float32(math.Round(float64(d/(2*math.Pi))))
-	b.pose.setAngle(b.pose.angle + d)
 }

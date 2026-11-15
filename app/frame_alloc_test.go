@@ -72,7 +72,7 @@ var menuRound = []struct{ page, steps string }{
 	{"Water", "u u u u u u d d d a f b"},
 	{"Fire", "u u u u u u d d d a f b"},
 	{"Pong", "u u u d a f b"},
-	{"Boids", "u u u u u u d a d d d a f b"}, // Gather, then Full
+	{"Boids", "u u u u u u d d a d d a f b"}, // Gather, then Full (past View)
 	{"Motion", "u u a f b"},
 }
 

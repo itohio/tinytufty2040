@@ -5,186 +5,81 @@ import (
 	"testing"
 )
 
-// Over many steps with the largest flock, while the box turns, spins and
-// shakes and the flock scatters, every boid stays inside the box and flies
-// between the speed limits.
-func TestBoidsStayInTheBoxWithinSpeed(t *testing.T) {
+// The badge is the camera: turned 30° to the right about its own up axis
+// (the gyro reading it, the flock's own motion frozen), a boid fixed where
+// the view pointed shows left of centre at the projected 30°: x = −tan 30°
+// in half widths at a 90° field, level.
+func TestTurningTheBadgeTurnsTheView(t *testing.T) {
+	a, tm := motionApp()
+	b := a.boids
+	b.motion = a.motion
+	b.fov = 2 // 90°
+	b.camera()
+	b.set(0, floatQ(b.look), b.vel(0)) // a boid straight ahead
+	const turn, T, dt = 30 * math.Pi / 180, 1.0, 1.0 / imuRate
+	// turn at the rate whose integral is exactly 30°: smooth(u) over T
+	for i := 1; float64(i)*dt <= T+0.5; i++ {
+		t0 := float64(i-1) * dt / T
+		t1 := float64(i) * dt / T
+		rate := turn * (smooth(t1) - smooth(t0)) / dt
+		imuFrame(a, [3]float32{0, gravity, 0}, [3]float32{0, float32(-rate), 0}, dt) // −Y turns the view to the right
+		*tm += dt
+	}
+	b.camera()
+	xq, yq, ok := b.project(wide(b.p[0]))
+	x, y := float64(xq)/boidsScrQ, float64(yq)/boidsScrQ
+	want := -math.Tan(turn)
+	if !ok || math.Abs(x-want) > 0.03 || math.Abs(y) > 0.03 {
+		t.Fatalf("turned 30° right: the boid ahead before shows at (%.3f, %.3f) (in view %v), want (%.3f, 0): left by the projected 30°", x, y, ok, want)
+	}
+}
+
+// A boid outside the view comes back to be seen: placed 90° off the view's
+// direction and flying away, it is in view within 10 s.
+func TestABoidOutsideTheViewComesBack(t *testing.T) {
 	b := newBoids()
-	b.count = len(boidsN) - 1
-	b.pose.spin = true
-	for s := range 3000 {
-		switch s % 500 {
-		case 100:
-			b.pose.target += 3 * boxTurnStep
-		case 250:
-			b.scatter()
-		case 300:
-			b.pose.shake()
-		}
+	b.count = 0                                                // 32
+	b.set(0, [3]float32{1, 0, 0}, [3]float32{0, boidsVMax, 0}) // 90° to the right of the view (it looks along −Y), flying away: toward +Y
+	for i := range 10 * 30 {
 		b.tick()
-		for i := range boidsN[b.count] {
-			bx, by := b.pose.toBox(b.x[i], b.y[i])
-			if bx < -2 || by < -2 || bx > boidsW*boidsFix+1 || by > boidsH*boidsFix+1 {
-				t.Fatalf("step %d boid %d outside the box: %d,%d", s, i, bx, by)
+		if b.inView(wide(b.p[0])) {
+			if i == 0 {
+				t.Fatal("the boid started in view")
 			}
-			ax, ay := abs32(b.vx[i]), abs32(b.vy[i])
-			mag := max(ax, ay) + min(ax, ay)>>2 + min(ax, ay)>>3
-			// ±3 for integer rounding of the scaled and rotated components
-			if mag > boidsVMax+3 || mag < boidsVMin-3 {
-				t.Fatalf("step %d boid %d speed %d outside [%d, %d]", s, i, mag, boidsVMin, boidsVMax)
-			}
+			return
 		}
 	}
+	x, y, ok := b.project(wide(b.p[0]))
+	t.Fatalf("after 10 s the boid is still out of view: at (%.2f, %.2f) half widths (ahead %v)", float64(x)/boidsScrQ, float64(y)/boidsScrQ, ok)
 }
 
-// Turning the box doesn't turn the flock: at any box angle, a boid no wall
-// reaches keeps its world position and velocity, so on screen it appears to
-// turn the other way.
-func TestBoidsKeepTheirWorldHeadingWhenTheBoxTurns(t *testing.T) {
+// The flock stays on the sphere: after 20 s with 128 boids every position is
+// a unit vector, every velocity tangent to it and within the speed limits.
+func TestBoidsStayOnTheSphere(t *testing.T) {
 	b := newBoids()
-	for angle := range 256 {
-		b.pose.setAngle(float32(angle) * 2 * math.Pi / 256)
-		b.x[0], b.y[0] = b.pose.cx+3*boidsFix, b.pose.cy-2*boidsFix
-		b.vx[0], b.vy[0] = boidsVMax, 0
-		b.walls(0)
-		if b.x[0] != b.pose.cx+3*boidsFix || b.y[0] != b.pose.cy-2*boidsFix || b.vx[0] != boidsVMax || b.vy[0] != 0 {
-			t.Fatalf("angle %d: a boid in the middle was changed to %d,%d v %d,%d", angle, b.x[0], b.y[0], b.vx[0], b.vy[0])
-		}
-	}
-	b.pose.setAngle(math.Pi / 2) // a quarter turn: east in the world is vertical on screen
-	if vx, vy := b.pose.vecToBox(boidsVMax, 0); abs32(vx) > 1 || abs32(vy) < boidsVMax-1 {
-		t.Fatalf("after a quarter turn the boid should fly vertically on screen, got %d,%d", vx, vy)
-	}
-}
-
-// A wall that moves pushes the boids it reaches: shaking the box drags its
-// walls through boids resting near one; they end up inside, moved along.
-func TestBoidsArePushedByAMovingWall(t *testing.T) {
-	b := newBoids()
-	b.count = 0
-	for i := range boidsMax { // all near the left wall, flying up and down
-		b.x[i], b.y[i] = boidsMargin+256, int32(i%32)*boidsFix+boidsFix
-		b.vx[i], b.vy[i] = 0, boidsVMin
-	}
-	b.pose.shakeDX, b.pose.shakeDY, b.pose.shakeT = boxShake, 0, 1 // throw the box right
-	x0 := b.x[0]
-	for range boxShakeLen / 2 {
-		b.pose.advance()
-		b.step()
+	b.count = 2 // 128
+	for range 20 * 30 {
+		b.tick()
 	}
 	for i := range boidsN[b.count] {
-		if bx, _ := b.pose.toBox(b.x[i], b.y[i]); bx < 0 {
-			t.Fatalf("boid %d left behind outside the wall: box x %d", i, bx)
+		p, v := b.pos(i), b.vel(i)
+		n := math.Sqrt(float64(dot3(p, p)))
+		sp := math.Sqrt(float64(dot3(v, v)))
+		if math.Abs(n-1) > 2e-4 || math.Abs(float64(dot3(v, p))) > 2e-4 || sp < boidsVMin*0.99 || sp > boidsVMax*1.01 {
+			t.Fatalf("boid %d: |p| %.6f, v·p %.2g, speed %.3f rad/s (want 1, 0, %.2f–%.2f; Q14 rounding: 2e-4)", i, n, dot3(v, p), sp, boidsVMin, boidsVMax)
 		}
-	}
-	if b.x[0]-x0 < boxShake/2 {
-		t.Fatalf("the wall moved %d but pushed the boid only %d", boxShake, b.x[0]-x0)
 	}
 }
 
+// A boid's head is coloured by its heading on screen, in octants: east 0,
+// then clockwise (screen y grows down).
 func TestOctantFollowsHeading(t *testing.T) {
 	for _, c := range []struct {
-		vx, vy int32
+		dx, dy float32
 		want   uint8
-	}{{100, 0, 0}, {70, 70, 1}, {0, 100, 2}, {-70, 70, 3}, {-100, 0, 4}, {-70, -70, 5}, {0, -100, 6}, {70, -70, 7}, {100, -30, 0}, {30, 100, 2}} {
-		if got := octant(c.vx, c.vy); got != c.want {
-			t.Errorf("octant(%d,%d) = %d, want %d", c.vx, c.vy, got, c.want)
-		}
-	}
-}
-
-// The flock feels the badge's own acceleration (owner 2026-11-13: boids
-// feel the specific force): thrown, it drifts the other way, as if left
-// behind; a still badge leaves it alone.
-func TestBoidsFeelTheBadgesAcceleration(t *testing.T) {
-	mean := func(felt float32) float64 {
-		rngState = 2463534242
-		b := newBoids()
-		b.feel(felt, 0)
-		var s float64
-		for range 10 {
-			b.tick()
-		}
-		n := boidsN[b.count]
-		for i := range n {
-			s += float64(b.vx[i])
-		}
-		return s / float64(n)
-	}
-	still, felt := mean(0), mean(4)
-	if felt-still < 10 {
-		t.Fatalf("4 m/s² felt to the right: the flock's mean vx %+.0f, still badge %+.0f; want it pushed right", felt, still)
-	}
-}
-
-// The window outruns the flock in a hand stroke (TG-6 #5a: up to 44 cells a
-// tick against a boid's 0.5): the boids it leaves behind stay outside and
-// glide back in, and none jumps across the window (owner: "they jump
-// around"; the walls used to reflect a boid swept 40 cells out to 40 cells
-// in). Replays the owner's squares (capture 2); then, the window still,
-// every boid is back inside within 2 s.
-func TestBoidsComeBackSmoothlyAfterTheWindowMoves(t *testing.T) {
-	s, rate := loadCapture(t, "testdata/tg6-squares.log")
-	a := testApp()
-	a.motion = newMotion()
-	b := a.boids
-	n := boidsN[b.count]
-	const span, hiY = boidsW * boidsFix, boidsH * boidsFix
-	inside := func(i int) bool {
-		bx, by := b.pose.toBox(b.x[i], b.y[i])
-		return bx >= 0 && bx < span && by >= 0 && by < hiY
-	}
-	var px, py [boidsMax]int32
-	copy(px[:], b.x[:])
-	copy(py[:], b.y[:])
-	worst, ticks := 0.0, 0
-	tick := func() {
-		b.tick()
-		ticks++
-		for i := range n {
-			if inside(i) {
-				d := math.Hypot(float64(b.x[i]-px[i]), float64(b.y[i]-py[i])) / boidsFix
-				worst = max(worst, d)
-			}
-			px[i], py[i] = b.x[i], b.y[i]
-		}
-	}
-	replay(a, s, rate, func(i int) {
-		if i%5 == 4 {
-			tick()
-		}
-	})
-	if worst > 3 {
-		t.Errorf("a boid in the window moved %.1f cells in one tick, want at most 3 (a wall carries a boid 1.5 cells an axis at most; its speed is 0.5)", worst)
-	}
-	for range 40 { // 2 s at 20 frames a second, the window still
-		tick()
-	}
-	out := 0
-	for i := range n {
-		if !inside(i) {
-			out++
-		}
-	}
-	if out > 0 {
-		t.Errorf("%d of %d boids still outside the window 2 s after it stopped", out, n)
-	}
-}
-
-// Gather puts the whole flock inside the window where it is now, moved and
-// turned (owner: a control that resets the flock into the window).
-func TestGatherPutsTheFlockInTheWindow(t *testing.T) {
-	b := newBoids()
-	b.count = 2
-	b.moveTo(0.3, -0.2) // 30 cm right, 20 cm down: far outside the start box
-	b.turnTo(1.7)
-	b.pose.advance()
-	b.gather()
-	const span, hiY = boidsW * boidsFix, boidsH * boidsFix
-	for i := range boidsN[b.count] {
-		bx, by := b.pose.toBox(b.x[i], b.y[i])
-		if bx < 0 || bx >= span || by < 0 || by >= hiY {
-			t.Fatalf("boid %d at box (%d, %d) after gather, want inside 0..%d × 0..%d", i, bx, by, span, hiY)
+	}{{1, 0, 0}, {1, 1, 1}, {0, 1, 2}, {-1, 1, 3}, {-1, 0, 4}, {-1, -1, 5}, {0, -1, 6}, {1, -1, 7}} {
+		if got := octant(c.dx, c.dy); got != c.want {
+			t.Errorf("octant(%v, %v) = %d, want %d", c.dx, c.dy, got, c.want)
 		}
 	}
 }

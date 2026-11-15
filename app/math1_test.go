@@ -39,15 +39,16 @@ func (r *rig) feed(acc, gyro [3]float32, dt float32) {
 	}
 }
 
-// paddle in cells (top), window in cells (box base, right and up).
-// Pong's paddle follows pitch, no longer the badge's displacement, so the
-// vertical display these targets measure is the boids window's: it follows
-// the badge's own up axis at the same sensitivity, cells and sign as the
-// paddle did.
+// paddle in cells (top), window in cells (right and down the screen).
+// These targets measure the badge-frame displacement in the cells the old
+// boids window moved: 20 per metre (1 px = 10 mm, 5 px a cell), up the screen
+// negative, as the paddle once did.
+const rigCellsPerM = 20
+
 func (r *rig) paddle() float64 { _, y := r.window(); return y }
 func (r *rig) window() (float64, float64) {
-	b := r.a.boids
-	return float64(b.pose.baseX) / boidsFix, float64(b.pose.baseY) / boidsFix
+	d := r.a.motion.disp
+	return float64(d[0]) * rigCellsPerM, -float64(d[1]) * rigCellsPerM
 }
 
 // sensor model, badge upright facing you (badge +Y = world up, +X = world right, +Z = towards you). Hand model v2,

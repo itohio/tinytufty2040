@@ -107,17 +107,11 @@ func TestTiltAloneDoesNotTranslate(t *testing.T) {
 			return math.Pi / 4 * (1 - smooth(u-2))
 		}
 	}
-	worst, boxAt45 := 0.0, float32(0)
-	drive(a, tm, 4*imuRate, roll, noAcc, func(i int) {
+	worst := 0.0
+	drive(a, tm, 4*imuRate, roll, noAcc, func(int) {
 		p := m.nav.P
 		worst = max(worst, math.Sqrt(float64(p[0]*p[0]+p[1]*p[1]+p[2]*p[2])))
-		if i == 3*imuRate/2 { // in the middle of the 45° hold
-			boxAt45 = a.boids.pose.angle
-		}
 	})
-	if d := math.Remainder(float64(boxAt45)-math.Pi/4, 2*math.Pi); math.Abs(d) > 0.02 {
-		t.Errorf("held at 45°: the boids' window at %.3f rad, want π/4 (it turns with the badge)", boxAt45)
-	}
 	if worst > 0.01 {
 		t.Errorf("turning 45° and back moved the badge up to %.1f cm in the world, want < 1", worst*100)
 	}
@@ -126,64 +120,59 @@ func TestTiltAloneDoesNotTranslate(t *testing.T) {
 	}
 }
 
-// The boids' window follows the badge's own up axis (owner: "vertical
-// position in the badge frame of reference"; Pong's paddle did until
-// PONG-PITCH-1): tilted 45°, a move along the badge's up axis moves the
-// window 1:1 on the glass, a move straight up in the world by cos 45°.
-func TestWindowFollowsTheBadgesOwnUpAxis(t *testing.T) {
-	const cellsPerM = 320.0 / 40.8 / 5 * 1000 // the panel: 320 px over 40.8 mm, 5 px per cell
-	const d = 0.015                           // m: 23.5 cells, inside the 40-cell travel
+// The badge-frame displacement follows the badge's own up axis: tilted
+// 45°, a move along the badge's up axis moves it 1:1, a move straight up in
+// the world by cos 45°.
+func TestDisplacementFollowsTheBadgesOwnUpAxis(t *testing.T) {
+	const d = 0.015 // m
 	for _, c := range []struct {
 		name string
 		dir  func(x, y [3]float64) [3]float64
-		want float64 // cells
+		want float64 // m
 	}{
-		{"along the badge's up axis", func(_, y [3]float64) [3]float64 { return y }, d * cellsPerM},
-		{"straight up in the world", func(_, _ [3]float64) [3]float64 { return [3]float64{0, 0, 1} }, d * cellsPerM * math.Cos(math.Pi/4)},
+		{"along the badge's up axis", func(_, y [3]float64) [3]float64 { return y }, d},
+		{"straight up in the world", func(_, _ [3]float64) [3]float64 { return [3]float64{0, 0, 1} }, d * math.Cos(math.Pi/4)},
 	} {
 		a, tm := motionApp()
-		a.applySens(glassMM) // which axis moves it, at 1:1
-		b := a.boids
+		m := a.motion
 		t1 := *tm
 		tilt := func(t float64) float64 { return math.Pi / 4 * smooth(t-t1) }
 		drive(a, tm, 3*imuRate, tilt, noAcc, nil) // turn 45° and rest
 		held := func(float64) float64 { return math.Pi / 4 }
-		y0 := b.pose.baseY
+		y0 := m.disp[1]
 		x, y, _ := badgeAxes(math.Pi / 4)
 		// a brisk 0.5 s stroke: gentler than ~0.2 m/s² reads as rest to the strapdown
 		drive(a, tm, 3*imuRate, held, stroke(c.dir(x, y), d, *tm, 0.5), nil)
-		moved := float64(y0-b.pose.baseY) / boidsFix
+		moved := float64(m.disp[1] - y0)
 		if moved < c.want*0.85 || moved > c.want*1.15 {
-			t.Errorf("%s %.1f cm: window up %.1f cells, want %.1f (±15 %%)", c.name, d*100, moved, c.want)
+			t.Errorf("%s %.1f cm: displacement up %.2f cm, want %.2f (±15 %%)", c.name, d*100, moved*100, c.want*100)
 		}
 	}
 }
 
-// The boids' window moves in the badge's own frame, 1:1 on the glass
-// (owner: "boids window - also badge frame of reference"): tilted 45°, a
-// move along the badge's own right edge moves it 1:1 across the box; a move
-// along the world's horizontal by cos 45°.
-func TestBoidsWindowMovesInTheBadgesFrame(t *testing.T) {
+// The displacement moves in the badge's own frame: tilted 45°, a move along
+// the badge's own right edge moves it 1:1; a move along the world's
+// horizontal by cos 45°.
+func TestDisplacementMovesInTheBadgesFrame(t *testing.T) {
 	const d = 0.10
 	for _, c := range []struct {
 		name string
 		dir  func(x [3]float64) [3]float64
-		want float64 // cells across the box
+		want float64 // m along the badge's right edge
 	}{
-		{"along the badge's right edge", func(x [3]float64) [3]float64 { return x }, d * 1000 / 0.6375},
-		{"along the world's horizontal", func([3]float64) [3]float64 { return [3]float64{1, 0, 0} }, d * 1000 / 0.6375 * math.Cos(math.Pi/4)},
+		{"along the badge's right edge", func(x [3]float64) [3]float64 { return x }, d},
+		{"along the world's horizontal", func([3]float64) [3]float64 { return [3]float64{1, 0, 0} }, d * math.Cos(math.Pi/4)},
 	} {
 		a, tm := motionApp()
-		a.applySens(glassMM)
-		b := a.boids
+		m := a.motion
 		t1 := *tm
 		drive(a, tm, 3*imuRate, func(t float64) float64 { return math.Pi / 4 * smooth(t-t1) }, noAcc, nil)
-		x0 := b.pose.baseX
+		x0 := m.disp[0]
 		x, _, _ := badgeAxes(math.Pi / 4)
 		drive(a, tm, 3*imuRate, func(float64) float64 { return math.Pi / 4 }, stroke(c.dir(x), d, *tm, 1), nil)
-		moved := float64(b.pose.baseX-x0) / boidsFix
+		moved := float64(m.disp[0] - x0)
 		if moved < c.want*0.85 || moved > c.want*1.15 {
-			t.Errorf("%s %.0f cm: the window moved %.1f cells, want %.1f (±15 %%)", c.name, d*100, moved, c.want)
+			t.Errorf("%s %.0f cm: the displacement moved %.1f cm, want %.1f (±15 %%)", c.name, d*100, moved*100, c.want*100)
 		}
 	}
 }
@@ -220,27 +209,12 @@ func TestPathViewTurnsWithTheBadge(t *testing.T) {
 	}
 }
 
-// Power-on with the badge still: until the attitude has turned from flat to
-// the badge's pose, the force minus the expected gravity is not the badge's
-// own acceleration, and the flock must not feel it (it felt 7 m/s²).
-func TestBootDoesNotPushTheFlock(t *testing.T) {
-	a := testApp()
-	a.motion = newMotion()
-	tm, felt := 0.0, 0.0
-	drive(a, &tm, 3*imuRate, func(float64) float64 { return 0 }, noAcc, func(int) {
-		felt = max(felt, math.Hypot(float64(a.boids.feltX), float64(a.boids.feltY)))
-	})
-	if felt >= boidsFeelMin {
-		t.Fatalf("a still badge at power-on pushed the flock with %.2f m/s² (dead zone %.1f)", felt, boidsFeelMin)
-	}
-}
-
 // An accelerometer that reads a little short or long at rest still lets
 // the filter settle (the badge reads 9.7 m/s² standing still, 0.06–0.16 m/s²
 // short; strapdown r8 measured MPU6050 offsets of 0.3–0.5 m/s²).
 // An attitude can only turn the reading, never change its size, so a settle
 // test on the size never passed there: the path was never started, and the
-// paddle, the boids' window and the Motion page never moved.
+// paddle, the displacement and the Motion page never moved.
 func TestSettlesDespiteAnAccelerometerScaleError(t *testing.T) {
 	for _, scale := range []float32{0.985, 1.015, 0.96, 1.04} {
 		a := testApp()
@@ -254,19 +228,13 @@ func TestSettlesDespiteAnAccelerometerScaleError(t *testing.T) {
 	}
 }
 
-// A shake (the badge thrown left and right, 6 m/s² at 1.5 Hz for 2 s)
-// sloshes the water and stirs the boids; a still badge does neither. At 1:1
-// on the glass (pinned) the window sweeps its walls through the flock; at
-// the default sensitivity (10 mm per px, TG-6 #6) the same shake moves the
-// window about a cell and only the felt acceleration stirs the flock: its
-// top mean speed rises about 6 % instead of 20 % (an owner decision:
-// a stronger boidsFeel would be a task of its own).
-func TestShakeSloshesWaterAndStirsBoids(t *testing.T) {
-	run := func(shake bool) (slosh, stir float64) {
+// A shake sloshes the water: shaken sideways at 1.5 Hz the water's centre
+// moves at least a cell more than on a still badge.
+func TestShakeSloshesWater(t *testing.T) {
+	run := func(shake bool) (slosh float64) {
 		rngState = 2463534242
 		a, tm := motionApp()
-		a.applySens(glassMM)
-		w, b := a.water, a.boids
+		w := a.water
 		for range 120 { // let the water settle level
 			w.step()
 		}
@@ -280,13 +248,6 @@ func TestShakeSloshesWaterAndStirsBoids(t *testing.T) {
 			}
 			return s / n
 		}
-		speed := func() float64 {
-			var s float64
-			for i := range boidsN[b.count] {
-				s += math.Hypot(float64(b.vx[i]), float64(b.vy[i]))
-			}
-			return s / float64(boidsN[b.count])
-		}
 		c0 := cx()
 		x, _, _ := badgeAxes(0)
 		acc := func(t float64) [3]float64 {
@@ -296,24 +257,17 @@ func TestShakeSloshesWaterAndStirsBoids(t *testing.T) {
 			k := 6 * math.Sin(2*math.Pi*1.5*t)
 			return [3]float64{x[0] * k, x[1] * k, x[2] * k}
 		}
-		var top float64
 		drive(a, tm, 2*imuRate, func(float64) float64 { return 0 }, acc, func(i int) {
 			if i%3 == 2 { // a frame every 3 samples
 				w.step()
-				b.tick()
 				slosh = max(slosh, math.Abs(cx()-c0))
-				top = max(top, speed())
 			}
 		})
-		return slosh, top
+		return slosh
 	}
-	sloshStill, stirStill := run(false)
-	sloshShake, stirShake := run(true)
+	sloshStill, sloshShake := run(false), run(true)
 	if sloshShake < sloshStill+1 {
 		t.Errorf("shaken, the water's centre moved %.2f cells (still badge: %.2f), want at least a cell more", sloshShake, sloshStill)
-	}
-	if stirShake < stirStill*1.2 {
-		t.Errorf("shaken, the boids' top mean speed %.0f (still badge: %.0f), want 20 %% more", stirShake, stirStill)
 	}
 }
 
@@ -383,15 +337,15 @@ func TestStillBadgeKeepsThePaddleStill(t *testing.T) {
 
 // Right after boot, with the badge's own sensor errors (it reads 9.7 m/s²
 // at rest; MPU6050 offsets 0.1–0.5 m/s² per axis, strapdown r8), a still
-// badge keeps the paddle and the boids' window still too (seen on the
+// badge keeps the paddle and the badge-frame displacement still too (seen on the
 // badge: the paddle crept 7 px, then 5 px, per 30 s in the first minutes after
 // boot while the Motion page read 0 cm: the strapdown's position crept by
 // millimetres while it learnt its bias at rest, under the readout's 1 cm).
-func TestStillBadgeRightAfterBootKeepsPaddleAndWindowStill(t *testing.T) {
+func TestStillBadgeRightAfterBootKeepsPaddleAndDisplacementStill(t *testing.T) {
 	a := testApp()
 	a.motion = newMotion()
 	a.pong.motion = a.motion
-	p, b := a.pong, a.boids
+	p, m := a.pong, a.motion
 	r := rand.New(rand.NewPCG(5, 6))
 	off := [3]float32{0.25, -0.35, 0.3} // gravity on +Y: |a| ≈ 9.46 + …
 	gbias := [3]float32{0.01, -0.012, 0.006}
@@ -409,22 +363,22 @@ func TestStillBadgeRightAfterBootKeepsPaddleAndWindowStill(t *testing.T) {
 	p.showFull()
 	p.fullPress(BtnA) // paused: only the badge moves the paddle
 	lo, hi := p.pad[0], p.pad[0]
-	wx0, wy0 := b.pose.baseX, b.pose.baseY
-	wmax := int32(0)
+	d0 := m.disp
+	dmax := 0.0
 	for i := range 60 * imuRate {
 		sample()
 		if i%3 == 2 {
 			p.tick()
 			lo, hi = min(lo, p.pad[0]), max(hi, p.pad[0])
-			wmax = max(wmax, abs32(b.pose.baseX-wx0), abs32(b.pose.baseY-wy0))
+			dmax = max(dmax, math.Abs(float64(m.disp[0]-d0[0])), math.Abs(float64(m.disp[1]-d0[1])))
 		}
 	}
 	const px = pongFix / 5
 	if hi-lo > px {
 		t.Errorf("the paddle wandered %.1f px in the first 60 s after boot, want ≤ 1", float64(hi-lo)/px)
 	}
-	if wmax > boidsFix { // one boid cell
-		t.Errorf("the boids' window wandered %.1f cells in the first 60 s after boot, want ≤ 1", float64(wmax)/boidsFix)
+	if dmax > 0.05 {
+		t.Errorf("the badge-frame displacement wandered %.1f cm in the first 60 s after boot, want ≤ 5", dmax*100)
 	}
 }
 
@@ -432,12 +386,12 @@ func TestStillBadgeRightAfterBootKeepsPaddleAndWindowStill(t *testing.T) {
 // for a moment (seen on the badge: rest 97 %, the paddle moved 17 px, 2.2 mm,
 // in 30 s on a still badge). At accelerometer noise 0.04 m/s² and gyro
 // 0.005 rad/s the host shows the same: rest 96 %, 16 false starts in
-// 120 s. The window must stay still through all of them (Pong's paddle
-// follows pitch since PONG-PITCH-1: TestPongPitchStillHandKeepsThePaddle).
-func TestNoisyStillBadgeKeepsTheWindowStill(t *testing.T) {
+// 120 s. The badge-frame displacement must stay still through all of them
+// (Pong's paddle follows pitch: TestPongPitchStillHandKeepsThePaddle).
+func TestNoisyStillBadgeKeepsTheDisplacementStill(t *testing.T) {
 	a := testApp()
 	a.motion = newMotion()
-	b := a.boids
+	m := a.motion
 	r := rand.New(rand.NewPCG(7, 8))
 	off := [3]float32{0.25, -0.35, 0.3}
 	gb := [3]float32{0.01, -0.012, 0.006}
@@ -450,23 +404,23 @@ func TestNoisyStillBadgeKeepsTheWindowStill(t *testing.T) {
 	for range 3 * imuRate {
 		sample()
 	}
-	wx0, wy0 := b.pose.baseX, b.pose.baseY
-	wmax := int32(0)
+	d0 := m.disp
+	dmax := 0.0
 	for i := range 120 * imuRate {
 		sample()
 		if i%3 == 2 {
-			wmax = max(wmax, abs32(b.pose.baseX-wx0), abs32(b.pose.baseY-wy0))
+			dmax = max(dmax, math.Abs(float64(m.disp[0]-d0[0])), math.Abs(float64(m.disp[1]-d0[1])))
 		}
 	}
-	if wmax > boidsFix {
-		t.Errorf("noisy still badge: the window wandered %.1f cells in 120 s, want ≤ 1", float64(wmax)/boidsFix)
+	if dmax > 0.05 {
+		t.Errorf("noisy still badge: the badge-frame displacement wandered %.1f cm in 120 s, want ≤ 5", dmax*100)
 	}
 }
 
 // Every real movement registers, quick flicks too (owner: "in Pong
 // a quick flick of 0.2–0.4 s is a real move"): up strokes of 3, 5 and 10 cm
-// lasting 0.2, 0.3 and 0.4 s move the badge-frame displacement the paddle
-// and the boids' window read 1:1 (±15 %).
+// lasting 0.2, 0.3 and 0.4 s move the badge-frame displacement 1:1
+// (±15 %).
 func TestQuickStrokesRegister(t *testing.T) {
 	up := [3]float64{0, 0, 1}
 	for _, T := range []float64{0.2, 0.3, 0.4} {
@@ -484,84 +438,35 @@ func TestQuickStrokesRegister(t *testing.T) {
 
 // The display follows a hand move as it happens (owner, TG-5 #2: "not
 // responding (jumps around)"): moving the badge up 1 cm in 0.6 s, the
-// boids' window (Pong's paddle until PONG-PITCH-1) starts within 0.25 s,
-// never jumps more than 25 px in a frame, and ends 1:1. The false-start gate
-// (an episode counted only after 1.5 mm and 0.45 s) held it still for half
-// a second and then jumped it 78 px at once.
+// badge-frame displacement starts within 0.25 s, never jumps more than
+// 3.2 mm in a frame (25 px on the glass at 1:1), and ends 1:1. The
+// false-start gate (an episode counted only after 1.5 mm and 0.45 s) held it
+// still for half a second and then jumped it 10 mm at once.
 func TestDisplayFollowsAHandMoveSmoothly(t *testing.T) {
 	a, tm := motionApp()
-	a.applySens(glassMM)
-	b := a.boids
+	m := a.motion
 	const start, frameS = 0.1, 3.0 / imuRate
-	pad0, prev := b.pose.baseY, b.pose.baseY
-	firstMove, frames, maxStep := -1.0, 0, int32(0)
+	y0, prev := m.disp[1], m.disp[1]
+	firstMove, frames, maxStep := -1.0, 0, 0.0
 	drive(a, tm, 2*imuRate, func(float64) float64 { return 0 }, stroke([3]float64{0, 0, 1}, 0.01, *tm+start, 0.6), func(i int) {
 		if i%3 != 2 {
 			return
 		}
 		frames++
-		maxStep = max(maxStep, abs32(b.pose.baseY-prev))
-		prev = b.pose.baseY
-		if firstMove < 0 && b.pose.baseY != pad0 {
+		maxStep = max(maxStep, math.Abs(float64(m.disp[1]-prev)))
+		prev = m.disp[1]
+		if firstMove < 0 && math.Abs(float64(m.disp[1]-y0)) > 2.5e-6 { // a window unit at 1:1
 			firstMove = float64(frames)*frameS - start
 		}
 	})
-	const px = boidsFix / fullCellPx
 	if firstMove < 0 || firstMove > 0.25 {
-		t.Errorf("the window first moved %.2f s into the move, want within 0.25 s", firstMove)
+		t.Errorf("the displacement first moved %.2f s into the move, want within 0.25 s", firstMove)
 	}
-	if maxStep > 25*px {
-		t.Errorf("the window jumped %d px in one frame, want ≤ 25 (a smooth follow)", maxStep/px)
+	if maxStep > 0.0032 {
+		t.Errorf("the displacement jumped %.1f mm in one frame, want ≤ 3.2 (a smooth follow)", maxStep*1000)
 	}
-	if got, want := float64(pad0-b.pose.baseY)/px, 0.01*float64(cellsPerM(glassMM))*fullCellPx; got < want*0.85 || got > want*1.15 {
-		t.Errorf("the window moved %.0f px for 1 cm, want %.0f (1:1)", got, want)
-	}
-}
-
-// The boids' window follows a hand move as it happens and the flock stays
-// inside it (owner, TG-5 #3: the boids were "broken completely"): moving
-// the badge up 1 cm in 0.6 s, the window starts within 0.25 s, never jumps
-// more than 2 cells in a frame, keeps (almost) every boid inside, and ends
-// 1:1. Behind the false-start gate the window froze for half a second and
-// then jumped by the whole move in one frame, sweeping its walls through
-// the flock.
-func TestBoidsWindowFollowsAHandMoveSmoothly(t *testing.T) {
-	a, tm := motionApp()
-	a.applySens(glassMM)
-	b := a.boids
-	const start, frameS = 0.1, 3.0 / imuRate
-	y0, prev := b.pose.baseY, b.pose.baseY
-	firstMove, frames, maxStep, outside, seen := -1.0, 0, int32(0), 0, 0
-	drive(a, tm, 2*imuRate, func(float64) float64 { return 0 }, stroke([3]float64{0, 0, 1}, 0.01, *tm+start, 0.6), func(i int) {
-		if i%3 != 2 {
-			return
-		}
-		b.tick()
-		frames++
-		maxStep = max(maxStep, abs32(b.pose.baseY-prev))
-		prev = b.pose.baseY
-		if firstMove < 0 && b.pose.baseY != y0 {
-			firstMove = float64(frames)*frameS - start
-		}
-		for k := range boidsN[b.count] {
-			seen++
-			dx, dy := b.x[k]-b.pose.cx, b.y[k]-b.pose.cy
-			if dx < -boidsW*boidsFix/2 || dx > boidsW*boidsFix/2 || dy < -boidsH*boidsFix/2 || dy > boidsH*boidsFix/2 {
-				outside++
-			}
-		}
-	})
-	if firstMove < 0 || firstMove > 0.25 {
-		t.Errorf("the window first moved %.2f s into the move, want within 0.25 s", firstMove)
-	}
-	if maxStep > 2*boidsFix {
-		t.Errorf("the window jumped %.1f cells in one frame, want ≤ 2 (a smooth follow)", float64(maxStep)/boidsFix)
-	}
-	if outside*100 > seen {
-		t.Errorf("%d of %d boid-frames outside the window during the move, want ≤ 1 %%", outside, seen)
-	}
-	if got, want := float64(y0-b.pose.baseY)/boidsFix, 0.01*float64(cellsPerM(glassMM)); got < want*0.85 || got > want*1.15 {
-		t.Errorf("the window moved %.1f cells for 1 cm, want %.1f (1:1)", got, want)
+	if got := float64(m.disp[1] - y0); got < 0.0085 || got > 0.0115 {
+		t.Errorf("the displacement moved %.2f cm for 1 cm, want 1 (1:1)", got*100)
 	}
 }
 

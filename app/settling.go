@@ -6,7 +6,7 @@ import (
 )
 
 // settlingText is shown while the motion state hasn't started (MATH-1
-// A1): until it has, the paddle and the boids' window don't move, and a
+// A1): until it has, the paddle and the Boids' view don't move, and a
 // frozen paddle must not be silent. In the footer and on the full-screen
 // motion views; ASCII only (the font).
 const settlingText = "settling - hold still"
