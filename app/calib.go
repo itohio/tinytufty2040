@@ -346,6 +346,7 @@ func (a *App) calibAct() {
 	if a.calib.guiding() && a.calib.g.fitSt == fitShown {
 		a.calib.useFit()
 		a.calNewFitInUse()
+		a.calPrior()
 		a.log2("calibration in use: ", a.calib.g.fit.Model.String())
 		if a.calib.g.use.Model == calib.OffsetScale { // a full fit: kept across power-off
 			a.calSave()

@@ -8,10 +8,10 @@ What TinyGo can do on a Pimoroni Tufty 2040 badge (RP2040, 133 MHz rated / 200 M
 | Water | EasyRobot's particle liquid that levels and follows gravity, pours, fills |
 | Fire | a burning liquid: fuel pools and sloshes with gravity and seeds flames that rise against it; flames on a 160×120 field, drawn interpolated full screen |
 | Pong | CPU vs CPU in its tile, you vs CPU full screen; paddles and ball at pixel positions |
-| Boids | a flock on a sphere around the badge: turning the badge looks around it |
+| Boids | a flock in a world frame; the screen is a box the badge's roll (or the buttons) turns and shakes through it |
 | Motion | with an IMU: the badge in 3D from a Mahony filter, a trail of where its top points, roll/pitch/yaw, gyro bias |
 
-An MPU6050 on the debug pads (I2C0, GPIO4/5, INT GPIO3) feeds one shared motion state (EasyRobot's Mahony filter, `x/math/filter/ahrs`, and strapdown, `x/math/nav/strapdown`, with the gyro bias learnt at rest): Water and Fire follow its tilt, the Boids' view turns with the badge, Pong's paddle follows its pitch, the Motion page shows its path; without one, the buttons do (see [docs/overview.md](docs/overview.md#motion-sensor)).
+An MPU6050 on the debug pads (I2C0, GPIO4/5, INT GPIO3) feeds the motion pipeline: an attitude (EasyRobot's Mahony filter, `x/math/filter/ahrs`, the gyro bias from the calibration) for Water and Fire's tilt, the Boids' view around the sphere and Pong's paddle, and EasyRobot's Kalman filter (`x/math/nav/eskf`) for the path the Motion page shows; without one, the buttons do (see [docs/overview.md](docs/overview.md#motion-sensor)).
 
 ## Layout
 
@@ -31,7 +31,7 @@ Needs Go 1.25+, TinyGo 0.43, a tinygui checkout next to this repo (`go.mod` repl
 ```sh
 go test ./...
 go run ./sim -out /tmp/tufty
-tinygo build -target=tufty2040 -o tufty.uf2 .
+tinygo build -target=tufty2040 -stack-size=6KB -o tufty.uf2 .   # or tools/build
 python3 tools/reboot2boot.py && cp tufty.uf2 /Volumes/RPI-RP2/
 tools/badgectl stats
 ```

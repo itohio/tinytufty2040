@@ -26,7 +26,11 @@ def rev(path):
 
 build_id = f"{rev(repo)}/{rev(os.path.join(repo, '..', 'tinygui'))}@{time.strftime('%m%d-%H%M')}"
 env = dict(os.environ, GOTOOLCHAIN="local", GOPROXY="off")
-cmd = ["tinygo", "build", "-target=tufty2040", "-size", "short",
+# -stack-size: TinyGo can't size the three tasks' stacks (main, the serial
+# writer, the console mux: recursive call graphs), so each takes the target's
+# 8 KB from the heap; 6 KB each leaves the heap room for the Kalman filter
+# (free 24 KB with both estimators; 8 KB stacks ran out of memory at boot)
+cmd = ["tinygo", "build", "-target=tufty2040", "-stack-size=6KB", "-size", "short",
        "-ldflags", f"-X main.buildID={build_id}", "-o", out, "."]
 r = subprocess.run(cmd, cwd=repo, env=env)
 if r.returncode != 0:

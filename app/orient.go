@@ -11,8 +11,8 @@ import (
 	"tinygo.org/x/drivers"
 )
 
-// The Motion page (only with an IMU): the path the badge has moved along in
-// the real world (the shared motion state's world position), seen from the
+// The Motion page (only with an IMU): the paths the badge has moved along in
+// the real world (Integration's and Kalman's, either or both), seen from the
 // badge (owner 2026-11-13: "you integrate real world path, then mahoney gives
 // orientation and orientation is used to rotate the view. the pov is not at
 // 0.0.0 ... but a bit further, so that more of the path could be visible"):
@@ -40,20 +40,26 @@ var (
 	pathScale  = color.RGBA{60, 66, 78, 255}
 )
 
-// pathTrack is the recorded world path, shared by the page's and the
-// full-screen views: a new point per millimetre moved.
+// pathTrack is the Kalman filter's recorded world path, shared by the
+// page's and the full-screen views: a new point per millimetre moved.
 type pathTrack struct {
 	m    *motion
 	pts  [pathPoints][3]int16 // millimetres (±32 m): half the RAM of float32 metres
 	n, i int
 }
 
+// at is the position now, as the page shows it (the bw low-pass).
+func (p *pathTrack) at() [3]float32 { return p.m.shown() }
+
+// the path's colour
+var pathHue = color.RGBA{80, 230, 235, 255}
+
 // record adds the badge's position when it has moved a millimetre from the
 // last point (once a frame). Compared in the stored millimetres: compared
 // with the metres, the rounding alone exceeded the step at rest and every
 // frame stored the same point again, pushing the path out of the ring.
 func (p *pathTrack) record() {
-	mm := toMM(p.m.pos)
+	mm := toMM(p.at())
 	if p.n > 0 {
 		l := p.pts[(p.i-1+pathPoints)%pathPoints]
 		dx, dy, dz := int32(mm[0])-int32(l[0]), int32(mm[1])-int32(l[1]), int32(mm[2])-int32(l[2])
@@ -66,8 +72,8 @@ func (p *pathTrack) record() {
 	p.n = min(p.n+1, pathPoints)
 }
 
-// toMM converts a position in metres to the stored millimetres (rounded;
-// clamped to ±32.767 m).
+// toMM and fromMM convert a position in metres to the stored millimetres
+// and back (rounded; clamped to ±32.767 m).
 func toMM(p [3]float32) (mm [3]int16) {
 	for i, v := range p {
 		mm[i] = int16(math.Round(float64(min(max(v*1000, -32767), 32767))))
@@ -75,14 +81,16 @@ func toMM(p [3]float32) (mm [3]int16) {
 	return mm
 }
 
-// reset starts a new path here.
-func (p *pathTrack) reset() {
-	p.m.resetPath()
-	p.n, p.i = 0, 0
+func fromMM(mm [3]int16) [3]float32 {
+	return [3]float32{float32(mm[0]) / 1000, float32(mm[1]) / 1000, float32(mm[2]) / 1000}
 }
+
+// reset starts a new path here.
+func (p *pathTrack) reset() { p.n, p.i = 0, 0 }
 
 type pathView struct {
 	ui.WidgetBase
+	m    *motion
 	t    *pathTrack
 	full bool // the full-screen view: it shows the settling notice
 	// this frame's camera (set by Draw; fields, not a closure: no
@@ -94,8 +102,8 @@ type pathView struct {
 	ox, oy int16
 	f      int32 // px
 	clip   viewRect
-	// the camera for the integer projection (the RP2040 has no FPU): its
-	// axes in the world (Q14) and its position (mm)
+	// the camera for the integer projection (the M0+ has no FPU): its axes
+	// in the world (Q14) and its position (mm)
 	ax, ay, az [3]int32
 	camMM      [3]int32
 }
@@ -104,12 +112,13 @@ type pathView struct {
 type viewRect struct{ x, y, w, h int16 }
 
 // setCamera places this frame's camera: at the latest position, set back
-// along the view axis (the badge's −Z: into the screen) by back metres.
+// along the view axis (the badge's −Z: into the screen) by back metres,
+// turned by the Kalman filter's own attitude (its path is in its frame).
 func (v *pathView) setCamera(back float32) {
-	m := v.t.m
-	v.q = m.ahrs.Output()
+	m := v.m
+	v.q = vec.Quaternion(m.kal.f.Q)
 	look := toWorld(v.q, [3]float32{0, 0, -1})
-	p := m.pos
+	p := m.shown()
 	v.cam = [3]float32{p[0] - back*look[0], p[1] - back*look[1], p[2] - back*look[2]}
 	v.ax = toQ14(toWorld(v.q, [3]float32{1, 0, 0}))
 	v.ay = toQ14(toWorld(v.q, [3]float32{0, 1, 0}))
@@ -139,7 +148,7 @@ func (v *pathView) project(mm [3]int16) (x, y int32, ok bool) {
 // path, as far as it reaches from the latest position, fits the view.
 func (v *pathView) back() float32 {
 	t := v.t
-	p := toMM(t.m.pos)
+	p := toMM(t.at())
 	var reach int64 // mm²
 	for k := range t.n {
 		reach = max(reach, dist2MM(t.pts[k], p))
@@ -162,9 +171,8 @@ func (v *pathView) Draw(ctx ui.Context) {
 	x0, y0 := ctx.DisplayPos()
 	w, h := int16(v.Width), int16(v.Height)
 	fillRect(d, x0, y0, w, h, boidsViewBG)
-	t := v.t
 	if v.full {
-		drawSettling(d, t.m, x0, y0, w, h)
+		drawSettling(d, v.m, x0, y0, w, h)
 	}
 	back := v.back()
 	v.setCamera(back)
@@ -175,21 +183,27 @@ func (v *pathView) Draw(ctx ui.Context) {
 	bar := int16(float32(v.f) * 0.10 / back)
 	fillRect(d, x0+6, y0+h-6, min(bar, w-12), 1, pathScale)
 	ui.DrawText(d, fontBody, x0+8, y0+h-9, "10 cm", pathScale) // tinyfont.WriteLine allocates
-	// the path, oldest dimmest, ending at the badge (the view's centre)
+	// the path, oldest dimmest, ending at the position now (the view's
+	// centre: the camera sits there)
+	t := v.t
 	var lx, ly int32
 	lok := false
 	for k := range t.n {
 		x, y, ok := v.project(t.pts[(t.i-t.n+k+pathPoints)%pathPoints])
 		if ok && lok {
-			f := uint8(60 + k*195/t.n)
-			line(d, v.clip, lx, ly, x, y, color.RGBA{f / 3, f, f, 255})
+			f := uint16(60 + k*195/t.n)
+			line(d, v.clip, lx, ly, x, y, color.RGBA{uint8(uint16(pathHue.R) * f / 255), uint8(uint16(pathHue.G) * f / 255), uint8(uint16(pathHue.B) * f / 255), 255})
 		}
 		lx, ly, lok = x, y, ok
 	}
-	if lok {
-		line(d, v.clip, lx, ly, int32(v.ox), int32(v.oy), colFG)
+	if x, y, ok := v.project(toMM(t.at())); ok {
+		if lok {
+			line(d, v.clip, lx, ly, x, y, pathHue)
+		}
+		if xi, yi := int16(x), int16(y); xi > x0+2 && xi < x0+w-3 && yi > y0+2 && yi < y0+h-3 {
+			fillRect(d, xi-2, yi-2, 5, 5, pathHue) // the badge, now
+		}
 	}
-	fillRect(d, v.ox-2, v.oy-2, 5, 5, colFG) // the badge, now
 	v.drawInset(d, x0+w-insetSize-2, y0+2)
 }
 
@@ -300,12 +314,18 @@ type motionDemo struct {
 
 func newMotionDemo(m *motion) *motionDemo {
 	md := &motionDemo{track: pathTrack{m: m}}
-	md.page = &pathView{WidgetBase: ui.NewWidgetBase(192, 144), t: &md.track}
-	md.full = &pathView{WidgetBase: ui.NewWidgetBase(ScreenW, ScreenH), t: &md.track, full: true}
+	md.page = &pathView{WidgetBase: ui.NewWidgetBase(192, 144), m: m, t: &md.track}
+	md.full = &pathView{WidgetBase: ui.NewWidgetBase(ScreenW, ScreenH), m: m, t: &md.track, full: true}
 	return md
 }
 
 func (m *motionDemo) tick() { m.track.record() }
+
+// reset starts the path here.
+func (m *motionDemo) reset() {
+	m.track.m.resetPath()
+	m.track.reset()
+}
 
 func (m *motionDemo) fullView() ui.Widget {
 	if m.fullOn {
@@ -318,7 +338,7 @@ func (m *motionDemo) fullView() ui.Widget {
 func (m *motionDemo) fullPress(b Button) bool {
 	switch b {
 	case BtnA:
-		m.track.reset()
+		m.reset()
 	case BtnB:
 		m.fullOn = false
 	case BtnC:
@@ -336,29 +356,33 @@ func (a *App) pageMotion() *page {
 	full := widget.NewToggle(44, 12, fontBody, colFG, "SHOW", "SHOW", colTrack, colTrack,
 		func() bool { return false }, func(bool) { md.fullOn = true; a.log("motion full screen") })
 	reset := widget.NewToggle(44, 12, fontBody, colFG, "HERE", "HERE", colTrack, colTrack,
-		func() bool { return false }, func(bool) { md.track.reset(); a.log("motion path reset") })
+		func() bool { return false }, func(bool) { md.reset(); a.log("motion path reset") })
+	bw := widget.NewDropdown(104, a.overlayStyle(), motionBWLabels, &m.bw,
+		func(i int, _ string) { a.log3("motion: bw ", bwWords[i], " Hz") })
 	p := a.newPageWith("Motion", layout.VFlow(4, 144),
 		still(md.page),
 		newField("Full", 34, 104, full),
 		newField("Path", 34, 104, reset),
+		newField("BW", 34, 104, bw),
 		still(a.text(104, func() string {
-			return m.txt[0].reset().str("x ").int(cm(m.pos[0])).str(" y ").int(cm(m.pos[1])).str(" z ").int(cm(m.pos[2])).str(" cm").String()
+			return m.txt[0].reset().str("kal ").int(cm(m.shKal.y[0])).str(" ").int(cm(m.shKal.y[1])).str(" ").int(cm(m.shKal.y[2])).str(" cm").String()
+		}, pathHue)),
+		still(a.text(104, func() string {
+			return m.txt[1].reset().str("r ").int(deg(m.rpy[0])).str(" p ").int(deg(m.rpy[1])).str(" y ").int(deg(m.rpy[2])).String()
 		}, colMuted)),
 		still(a.text(104, func() string {
-			return m.txt[1].reset().str("roll ").int(deg(m.rpy[0])).str(" pitch ").int(deg(m.rpy[1])).String()
-		}, colMuted)),
-		still(a.text(104, func() string { return m.txt[2].reset().str("yaw ").int(deg(m.rpy[2])).String() }, colMuted)),
-		still(a.text(104, func() string {
-			t := m.txt[4].reset()
+			t := m.txt[2].reset()
 			if m.settling() {
 				return t.str("settling").String()
 			}
-			if m.nav.Still {
-				return t.str("at rest").String()
-			}
-			return t.str("moving").String()
+			return t.String()
 		}, colMuted)),
 	)
 	p.demo = md
 	return p
 }
+
+// the Motion page's dropdowns
+var (
+	motionBWLabels = []string{bw20: "20 Hz", bw10: "10 Hz"}
+)

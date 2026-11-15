@@ -20,8 +20,9 @@ replace github.com/itohio/tinygui => ../tinygui
 
 require github.com/itohio/EasyRobot v0.0.0
 
-// EasyRobot (MPU6050 driver, Mahony, strapdown, flip) is developed next to
-// this repo too; the demo builds against the local checkout. Built and
-// verified against EasyRobot 2f3bd35 (the multi-pose calibration solver,
-// CAL-1; before it 4a816e3, flip's ER-061 commits).
+// EasyRobot (MPU6050 driver, Mahony, the error-state Kalman filter, flip)
+// is developed next to this repo too; the demo builds against the local
+// checkout. Built and verified against EasyRobot 79e2bd5 (the Kalman
+// filter's clip limits through the calibration's fit; before it 2f3bd35,
+// the multi-pose calibration solver).
 replace github.com/itohio/EasyRobot => ../EasyRobot

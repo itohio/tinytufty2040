@@ -3,27 +3,25 @@ package app
 import (
 	"math"
 
-	"github.com/itohio/EasyRobot/x/math/filter/ahrs"
-	"github.com/itohio/EasyRobot/x/math/mat"
-	"github.com/itohio/EasyRobot/x/math/nav/strapdown"
+	"github.com/itohio/EasyRobot/x/math/nav/calib"
+
 	"github.com/itohio/EasyRobot/x/math/vec"
 )
 
 // Motion from the IMU, at full precision (owner: "imu is PRECISE and should
 // be used precisely"). Samples arrive in the badge's axes (+X right, +Y up
 // the screen, +Z out of it; the firmware maps the chip's mounting, which
-// faces away from the screen) and SI units. Here: the gyro
-// bias is learnt while the badge rests, EasyRobot's Mahony filter fuses
-// gyro and accelerometer into an orientation, and the demos' gravity comes
-// from the filter's estimate (not the raw accelerometer, so shaking the
-// badge doesn't throw the liquid around).
+// faces away from the screen) and SI units, the calibration's fit applied.
+// Two estimators, each for its own readers, neither with rules (no rest
+// detection, hold, leak, recentre or clamp):
+//   - the attitude (attitude.go: EasyRobot's Mahony filter, the gyro's bias
+//     from the fit in use or the Calibration page's still measurement):
+//     Boids, Pong and the demos' gravity;
+//   - the Kalman filter (navState: EasyRobot's error-state filter): the
+//     badge's path on the Motion page, seen through its own attitude.
 
 const (
-	restGyro  = 0.05 // rad/s: below this on every axis (after the bias) …
-	restAccel = 0.6  // … and |a| within this of g (m/s²), the badge is at rest
-	restFirst = 30   // rest samples averaged for the first bias estimate
-	biasRate  = 0.02 // then the bias follows the resting gyro this fast
-	gravity   = 9.80665
+	gravity = 9.80665
 	// the filter has settled once the world acceleration (gravity off, by
 	// its attitude) is below settleAccel, on the force averaged over
 	// settleTau: a still hand's tremor (0.06–0.12 m/s², MATH-1) is
@@ -44,103 +42,39 @@ const (
 	// steady gain
 	kpSettle = 10
 	kp       = 2
-	// the shown position (track): a motion shorter than holdMove ends where
-	// it went; longer, the leak fades in over fadeMove up to 1/leakTau; after
-	// a long motion the position goes back to where it began (recentreTau)
-	holdMove    = 2.0 // s: a 10 cm stroke takes about 1 s
-	fadeMove    = 1.0 // s
-	leakTau     = 1.5 // s
-	recentreTau = 2.0 // s
-	// the app's own stillness (MATH-1 A3): the force vector's variance (its
-	// three axes: a horizontal move hardly changes |f|) and the gyro's mean
-	// square (after the bias), over quietTau, under quietAccel and quietGyro.
-	// A still hand's tremor is under both; a hand move isn't, whatever the
-	// strapdown's rest test says
-	quietTau   = 0.5  // s
-	quietAccel = 0.15 // m/s²: standard deviation of f (all axes)
-	quietGyro  = 0.1  // rad/s: RMS
-	// over this gyro RMS the badge is in a hand: a stroke so far is held
-	// when quiet; on a support it's the strapdown's path, as before
-	quietHandG = 0.008 // rad/s
-	// a motion with a sustained push isn't quiet however smooth it is: the
-	// world acceleration's quietFast average less its quietSlow baseline (a
-	// slow attitude error cancels) under quietPush. A steady hand's tremor
-	// peaks at 0.044 m/s², a 10 cm stroke in 2 s at 0.08-0.12
-	quietFast = 0.25 // s
-	quietSlow = 2.0  // s
-	quietPush = 0.06 // m/s²
-	// a hold starts only once still for quietHold in a row: a stroke's
-	// acceleration crosses zero at its middle (its peak speed), and that
-	// brief quiet mustn't stop it
-	quietHold = 0.3 // s
 )
 
+// motion is the motion pipeline, each part doing one thing: the attitude,
+// the Kalman estimator, the Motion page's conditioning of what it shows,
+// and the specific force the demos feel. No part decides anything for
+// another, and nothing on top decides (no hold, rest or recentre rule).
 type motion struct {
-	ahrs     *ahrs.MahonyAHRS
-	in       mat.Matrix3x3 // accel, gyro, mag rows; passed by pointer (no boxing)
-	bias     [3]float32
-	biasN    int        // rest samples in the first estimate (restFirst: done)
-	resting  bool       // the last sample was at rest
-	gRest    float32    // |a| at rest (m/s²): gravity as this accelerometer reads it (9.7 upright, 10.0 flat)
-	up       [3]float32 // world up in the badge's frame, once a frame (frameMotion)
-	fresh    bool       // samples arrived since the last frameMotion
-	samples  int
-	rpy      [3]float32 // roll, pitch, yaw (rad), badge-relative, once a frame: see badgeEuler
-	yaw0     float32    // the yaw at the last path reset: yaw is shown from there
-	lastGyro [3]float32 // after the bias
-	// EasyRobot's strapdown brick (x/math/nav/strapdown) on the filter's
-	// attitude, for nav.Still: whether the badge rests
-	nav strapdown.Nav
-	// the shared motion state every demo reads (owner 2026-11-13: one
-	// motion state, computed once per IMU sample): the attitude (ahrs),
-	// the shown world position (pos, see track), and, in the badge's own
-	// frame (owner: "vertical position in the badge frame of reference ...
-	// same for water and fire"), the displacement (each world step turned
-	// into the badge's axes as it is now, summed) and the specific force
-	// (what the accelerometer reads: gravity plus the badge's own
-	// acceleration)
-	pos       [3]float32 // m, world (z up): the shown position (track)
-	vel       [3]float32 // m/s, world: pos's velocity during a long motion
-	off       [3]float32 // pos − nav.P while pos follows the strapdown (at rest, in a stroke)
-	anchor    [3]float32 // pos where the current or last motion began
-	moveFor   float32    // s since the badge left rest (0 at rest)
-	long      bool       // the last motion lasted holdMove or more: at rest pos goes back to anchor
-	qMean     [3]float32 // f averaged over quietTau
-	qVar      float32    // |f − qMean|² averaged over quietTau
-	qG2       float32    // |gyro|² after the bias, averaged over quietTau
-	qSeeded   bool       // qMean starts at the first sample
-	qFast     [3]float32 // world acceleration less gravity, averaged over quietFast
-	qSlow     [3]float32 // and over quietSlow
-	offHold   [3]float32 // off when the current hold began
-	holdFor   float32    // s the shown position has been held (quiet, the strapdown awake); 0 when not
-	wakeFor   float32    // s since the strapdown last left rest (0 at rest)
-	quietFor  float32    // s the app's stillness has said still in a row
-	vRecent   [3]float32 // the world acceleration less gravity, integrated with a quietTau*2 leak
-	pRecent   [3]float32 // vRecent integrated the same way
-	disp      [3]float32 // m, badge axes (+X right, +Y up the screen, +Z out of it)
-	force     [3]float32 // m/s², badge axes, low-passed (forceTau)
-	lastPos   [3]float32 // pos at the previous sample
-	movesN    int        // the strapdown's moving episodes since the last motion report
-	wasStill  bool       // the last sample was at rest (an episode starts when it leaves rest)
-	settleFor float32    // s in a row the attitude has explained the averaged accelerometer
-	fSettle   [3]float32 // the force averaged over settleTau for the settle test (badge axes)
-	fSeeded   bool       // fSettle holds a sample
-	settled   bool       // the filter has agreed with the accelerometer at rest once
-	sampleN   int        // samples since the last motion report (console `motion`)
-	restN     int        // … of which the strapdown called rest
-	txt       [5]textBuf // the Motion page's lines
+	att     attitude   // which way the badge is turned (Boids, Pong)
+	kal     navState   // the Kalman estimator: the path (kal.P), in place
+	shKal   lowpass3   // its position through the output bandwidth (the Motion page)
+	force   lowpass3   // m/s², badge axes: the specific force over forceTau (Water, Fire)
+	bw      int        // the Motion page's output bandwidth: bw20, bw10
+	up      [3]float32 // world up in the badge's frame, once a frame (frameMotion)
+	rpy     [3]float32 // roll, pitch, yaw (rad), badge-relative, once a frame: see badgeEuler
+	yaw0    float32    // the yaw at the last path reset: yaw is shown from there
+	fresh   bool       // samples arrived since the last frameMotion
+	samples int
+	txt     [4]textBuf // the Motion page's lines
 }
 
+// the Motion page's output bandwidth: a first-order low-pass on the shown
+// position (the estimator and the demos don't see it)
+const (
+	bw20 = iota
+	bw10
+)
+
+var bwHz = [...]float32{bw20: 20, bw10: 10}
+
 func newMotion() *motion {
-	nav, err := strapdown.New(strapdown.DefaultConfig())
-	if err != nil {
-		panic("strapdown: " + err.Error()) // DefaultConfig is valid
-	}
-	// no integral term (KI 0): learnBias removes the gyro's bias, and an
-	// integral wound up while the filter turns from flat to the badge's pose
-	// kept turning it after
-	return &motion{ahrs: ahrs.NewMahony(ahrs.WithKP(kpSettle), ahrs.WithKI(0), ahrs.WithMagnetometer(false)),
-		up: [3]float32{0, 1, 0}, nav: nav, force: [3]float32{0, gravity, 0}, gRest: gravity}
+	m := &motion{att: newAttitude(), up: [3]float32{0, 1, 0}, force: lowpass3{[3]float32{0, gravity, 0}}}
+	m.kal.init()
+	return m
 }
 
 // SetIMU feeds one IMU sample (accelerometer m/s², gyro rad/s, sensor =
@@ -153,55 +87,27 @@ func (a *App) SetIMU(acc, gyro [3]float32, dt float32) {
 	if m == nil {
 		return
 	}
-	if a.calib != nil { // the Calibration page's calibrator; the motion state runs on regardless
+	if a.calib != nil {
+		// the calibrator measures the raw samples; a fit in use corrects
+		// the accelerometer for everything after it
 		a.calib.add(acc, gyro, dt)
-		// an orientation fit in use corrects the accelerometer samples the
-		// motion state gets; the calibrator keeps the raw ones (it measures
-		// them)
 		acc = a.calib.correct(acc)
 	}
+	m.step(acc, gyro, dt)
+}
+
+// step runs the pipeline on one corrected sample: the attitude, the Kalman
+// estimator (the raw gyro: it estimates its own bias), then the
+// conditioning of what is shown and felt.
+func (m *motion) step(acc, gyro [3]float32, dt float32) {
 	m.samples++
-	m.learnBias(acc, gyro)
-	for i := range gyro {
-		gyro[i] -= m.bias[i]
+	if m.att.update(acc, gyro, dt) {
+		m.resetPath() // the path starts where the attitude first settles
 	}
-	m.lastGyro = gyro
-	// the accelerometer corrects the tilt on every sample: no gyro-only
-	// gate. Every gate tried held the correction off through hand motion
-	// (it turns at 0.4–1.4 rad/s) and after a flip, and the tilt error then
-	// leaked gravity into the motion; one gated on the force turned into
-	// the world by the filter's own attitude even locked itself (an
-	// attitude error read as acceleration: TG-6 capture 0, still 7° off
-	// after 60 s at rest). The owner's squares close only ungated (TG-6
-	// capture 2).
-	m.settle(acc, dt)
-	m.in = mat.Matrix3x3{acc, gyro, {}}
-	m.ahrs.GainP = kp
-	if !m.settled {
-		m.ahrs.GainP = kpSettle
-	}
-	m.ahrs.Update(dt, &m.in)
-	q := m.ahrs.Output()
-	if m.settled {
-		// only once the filter has turned to the badge's pose: fed from
-		// power-on, the strapdown learnt its bias while the filter still
-		// turned from flat to upright (0.27 m/s² off), and a bias error above
-		// its rest threshold kept it from ever seeing a rest to re-learn at
-		m.nav.Update(dt, [4]float32(q), acc, gyro)
-		m.track(q, acc, dt)
-	}
-	m.sampleN++
-	if m.nav.Still {
-		m.restN++
-	}
-	// the world step since the last sample, turned into the badge's axes
-	d := [3]float32{m.pos[0] - m.lastPos[0], m.pos[1] - m.lastPos[1], m.pos[2] - m.lastPos[2]}
-	m.lastPos = m.pos
-	m.addStep(toBadge(q, d), m.nav.Still)
-	k := dt / (forceTau + dt)
-	for i := range acc {
-		m.force[i] += (acc[i] - m.force[i]) * k
-	}
+	m.kal.update(dt, acc, gyro)
+	kb := dt / (1/(2*math.Pi*bwHz[m.bw]) + dt) // the output bandwidth
+	m.shKal.step(m.kal.P, kb)
+	m.force.step(acc, dt/(forceTau+dt))
 	m.fresh = true
 }
 
@@ -216,7 +122,7 @@ func (a *App) frameMotion() {
 		return
 	}
 	m.fresh = false
-	q := m.ahrs.Output()
+	q := m.att.q()
 	q0, q1, q2, q3 := q[0], q[1], q[2], q[3]
 	// world up in the badge's frame (what a resting accelerometer measures)
 	m.up = [3]float32{2 * (q1*q3 - q0*q2), 2 * (q0*q1 + q2*q3), q0*q0 - q1*q1 - q2*q2 + q3*q3}
@@ -230,15 +136,15 @@ func (a *App) frameMotion() {
 //   - Water and Fire's fuel feel the specific force in the screen's frame:
 //     things fall along it, so a tilt and a shake both move them.
 //   - Boids look through the badge's attitude (boids.camera reads it).
-//   - Pong's paddle follows the displacement along the badge's own up axis
-//     (pong.follow reads disp).
-//   - The Motion page's path is the shown world position, seen from the
-//     badge (pathTrack reads pos; pathView turns the camera with the attitude).
+//   - Pong's paddle follows the badge's pitch (pong.follow).
+//   - The Motion page's path is the Kalman filter's position, seen through
+//     its own attitude (pathTrack, pathView).
 func (a *App) applyMotion() {
 	m := a.motion
 	// screen x right = +X, y down = −Y; things fall against the specific force
-	gx, gy := -m.force[0], m.force[1]
+	gx, gy := -m.force.y[0], m.force.y[1]
 	a.SetTilt(gx, gy)
+
 }
 
 // toBadge turns a world vector into the badge's frame (the inverse of
@@ -263,227 +169,12 @@ func toWorld(q vec.Quaternion, b [3]float32) [3]float32 {
 	}
 }
 
-// settle notes when the filter has turned from flat to the badge's pose
-// (the path starts there).
-func (m *motion) settle(acc [3]float32, dt float32) {
-	if m.settled {
-		return
-	}
-	if !m.fSeeded {
-		m.fSettle, m.fSeeded = acc, true
-	}
-	k := dt / (settleTau + dt)
-	for i := range acc {
-		m.fSettle[i] += (acc[i] - m.fSettle[i]) * k
-	}
-	// the filter starts flat and turns to the badge's pose: settled when the
-	// attitude points along the averaged force, its direction only. An
-	// attitude can turn the reading but never change its size, and an
-	// uncalibrated MPU6050 reads 0.1–0.5 m/s² off g at rest (the badge:
-	// 9.7), so a test on the size never passed there and the path never
-	// started. No test of rest sample by sample: in a still hand the gyro
-	// tremor (0.03 rad/s) broke the app's rest test on 30 % of the samples,
-	// the run never reached settleTime and nothing moved (MATH-1 A1); a
-	// real motion turns the average away from the attitude instead.
-	fw := toWorld(m.ahrs.Output(), m.fSettle)
-	f2 := fw[0]*fw[0] + fw[1]*fw[1] + fw[2]*fw[2]
-	const tilt = settleAccel / gravity // the largest angle (rad) left between them
-	if m.biasN >= restFirst && fw[2] > 0 && fw[0]*fw[0]+fw[1]*fw[1] < tilt*tilt*f2 {
-		m.settleFor += dt
-	} else {
-		m.settleFor = 0
-	}
-	if m.settleFor >= settleTime {
-		m.settled = true
-		m.resetPath() // the path starts here
-	}
-}
-
-// resetPath puts the path's origin where the badge is now (the learnt
-// accelerometer bias is kept) and makes the badge's heading now yaw 0.
+// resetPath puts the Kalman path's origin where the badge is now (its
+// learnt state is kept) and makes the badge's heading now yaw 0.
 func (m *motion) resetPath() {
-	m.nav.Reset()
-	m.pos, m.vel, m.off, m.anchor, m.lastPos = [3]float32{}, [3]float32{}, [3]float32{}, [3]float32{}, [3]float32{}
-	m.moveFor, m.long = 0, false
-	_, _, m.yaw0 = badgeEuler(m.ahrs.Output())
-}
-
-// track moves the shown position: the hybrid the owner chose (TG-6 3b,
-// 2026-11-14).
-//   - At rest and through a short stroke it follows the strapdown, which
-//     integrates rest to rest (its own motion onset and rotation in place
-//     included): the stroke ends where it went and holds there.
-//   - A motion longer than holdMove can't be integrated with this sensor (a
-//     1° tilt error is about 30 m in 20 s of hand motion: the strapdown's
-//     position ran away in the owner's capture 2). From then on the world
-//     acceleration (the force turned by the filter's attitude, which the
-//     accelerometer keeps level, less gravity as this accelerometer reads it
-//     at rest) is integrated with velocity and position leaking toward
-//     where the motion began, faded in over fadeMove: the motion's shape
-//     shows at its size (the owner's 15–30 cm squares) and slow drift
-//     doesn't.
-//   - After such a motion the position goes back there at rest, and the
-//     strapdown is followed again from wherever pos is.
-//
-// quiet reports the app's own stillness after this sample.
-func (m *motion) quiet(q vec.Quaternion, acc [3]float32, dt float32) bool {
-	aw := toWorld(q, acc)
-	aw[2] -= m.gRest
-	kf, ks := dt/(quietFast+dt), dt/(quietSlow+dt)
-	var p2 float32
-	for i := range aw {
-		m.vRecent[i] += (aw[i] - m.vRecent[i]/(2*quietTau)) * dt
-		m.pRecent[i] += (m.vRecent[i] - m.pRecent[i]/(2*quietTau)) * dt
-		m.qFast[i] += (aw[i] - m.qFast[i]) * kf
-		m.qSlow[i] += (aw[i] - m.qSlow[i]) * ks
-		e := m.qFast[i] - m.qSlow[i]
-		p2 += e * e
-	}
-	if !m.qSeeded {
-		m.qMean, m.qSeeded = acc, true
-	}
-	k := dt / (quietTau + dt)
-	var d2 float32
-	for i := range acc {
-		d := acc[i] - m.qMean[i]
-		d2 += d * d
-		m.qMean[i] += d * k
-	}
-	m.qVar += (d2 - m.qVar) * k
-	g := m.lastGyro
-	m.qG2 += (g[0]*g[0] + g[1]*g[1] + g[2]*g[2] - m.qG2) * k
-	return m.qVar < quietAccel*quietAccel && m.qG2 < quietGyro*quietGyro && p2 < quietPush*quietPush
-}
-
-// inHand reports a hand, not a support: a hand always turns a little
-// (0.025-0.07 rad/s RMS; a desk 0.001), a stroke from rest hardly at all.
-func (m *motion) inHand() bool { return m.qG2 > quietHandG*quietHandG }
-
-func (m *motion) track(q vec.Quaternion, acc [3]float32, dt float32) {
-	quiet := m.quiet(q, acc, dt)
-	if m.nav.Still {
-		m.wakeFor = 0
-	} else {
-		m.wakeFor += dt
-	}
-	if quiet {
-		m.quietFor += dt
-	} else {
-		m.quietFor = 0
-	}
-	// MATH-1 A3: the strapdown wakes on a still badge (a hand's tremor, taps,
-	// a creep) and its position drifts while it's awake; that isn't shown.
-	// When the app's own stillness says still and the strapdown is awake,
-	// the shown position holds: in a hand always, on a support once a motion
-	// is long (a stroke from rest on a support is the strapdown's path, as
-	// before). Only the strapdown's rest ends a motion
-	if m.quietFor >= quietHold && !m.nav.Still && (m.inHand() || m.moveFor >= holdMove) {
-		if m.holdFor == 0 {
-			m.offHold = m.off
-		}
-		m.holdFor += dt
-		if m.moveFor > 0 {
-			// a motion under way keeps its clock: its stroke hands over to
-			// long mode on time (the owner's squares pause at the corners)
-			m.moveFor += dt
-		}
-		m.vel = [3]float32{}
-		m.hold()
-		return
-	}
-	if m.holdFor > 0 && !m.nav.Still && m.holdFor < 2*quietTau && m.moveFor < holdMove {
-		// the hold was shorter than the quiet test's response time (two of
-		// its time constants): its lag at a motion's start, or a dip in the
-		// middle of one, not a wake's drift; the strapdown's path through it
-		// is shown. A motion starting now begins below and is timed from its
-		// onset: timed from the hold's start, a short stroke out of a still
-		// hand counted as long, and went back to where it began
-		m.off = m.offHold
-		if m.moveFor+dt < holdMove { // a long motion never snaps onto the strapdown's path
-			m.followNav()
-		}
-	}
-	if m.holdFor > 0 && m.moveFor >= holdMove {
-		// a long motion leaves a hold with the velocity gained while the
-		// quiet test was still deciding (a stroke starts gently): without
-		// it the stroke's start is lost and its full deceleration runs it
-		// backwards
-		m.resume()
-	}
-	m.holdFor = 0
-	if m.nav.Still {
-		if m.moveFor > 0 { // a motion has just ended
-			m.long = m.moveFor >= holdMove
-			m.moveFor = 0
-		}
-		if !m.long {
-			if quiet && m.inHand() {
-				m.hold() // its rest-entry correction of a wake's drift isn't shown either
-			} else {
-				m.followNav()
-			}
-			return
-		}
-		k := dt / recentreTau
-		for i := range m.pos {
-			m.pos[i] += (m.anchor[i] - m.pos[i]) * k
-			m.off[i] = m.pos[i] - m.nav.P[i]
-		}
-		return
-	}
-	if m.moveFor == 0 { // a motion begins
-		m.anchor, m.long = m.pos, false
-		m.trustNav(dt)
-	}
-	m.moveFor += dt
-	if m.moveFor < holdMove { // a stroke so far: the strapdown's path
-		m.followNav()
-		m.vel = m.nav.V
-		return
-	}
-	leak := min(1, (m.moveFor-holdMove)/fadeMove) / leakTau
-	aw := toWorld(q, acc)
-	aw[2] -= m.gRest
-	for i := range aw {
-		m.vel[i] += (aw[i] - m.vel[i]*leak) * dt
-		m.pos[i] += (m.vel[i] - (m.pos[i]-m.anchor[i])*leak) * dt
-	}
-}
-
-// trustNav starts a motion in long mode (the app's own path) when the
-// strapdown has been awake since before it: in a hand it always is, and on
-// real data its path after a long wake runs off during a motion (its own
-// attitude has drifted, MATH-1 E1: the owner's squares ran 47 cm off in
-// 2 s). A motion that woke it shows its path, as before.
-func (m *motion) trustNav(dt float32) {
-	if m.wakeFor > m.moveFor+dt+2*quietTau {
-		m.moveFor = holdMove
-		m.resume()
-	}
-}
-
-// resume starts long mode with the path gained while the quiet test was
-// still deciding: the velocity and distance of the last second or so.
-func (m *motion) resume() {
-	m.vel = m.vRecent
-	for i := range m.pos {
-		m.pos[i] += m.pRecent[i]
-	}
-}
-
-// hold keeps the shown position where it is, whatever the strapdown's
-// position does: off follows it.
-func (m *motion) hold() {
-	for i := range m.off {
-		m.off[i] = m.pos[i] - m.nav.P[i]
-	}
-}
-
-// followNav puts the shown position on the strapdown's, shifted by off.
-func (m *motion) followNav() {
-	for i := range m.pos {
-		m.pos[i] = m.nav.P[i] + m.off[i]
-	}
+	m.kal.Reset()
+	m.shKal = lowpass3{}
+	_, _, m.yaw0 = badgeEuler(m.att.q())
 }
 
 // badgeEuler is the badge's attitude as the owner reads it (seen on
@@ -519,71 +210,31 @@ func wrapPi(a float32) float32 {
 	return a
 }
 
-// learnBias estimates the gyro's offset while the badge rests: the mean of
-// the first restFirst resting samples, then a slow follow.
-func (m *motion) learnBias(acc, gyro [3]float32) {
-	an := float32(math.Sqrt(float64(acc[0]*acc[0] + acc[1]*acc[1] + acc[2]*acc[2])))
-	// the band is centred on gravity as this accelerometer reads it once
-	// learnt (this badge: 9.73, not 9.81): centred on 9.80665 it let in
-	// −0.52..+0.68 m/s², and gRest crept up (MATH-1 A4)
-	g := float32(gravity)
-	if m.biasN >= restFirst {
-		g = m.gRest
-	}
-	m.resting = an > g-restAccel && an < g+restAccel
-	for i := range gyro {
-		if d := gyro[i] - m.bias[i]; d > restGyro || d < -restGyro {
-			if m.biasN >= restFirst { // a learnt bias: this is motion
-				m.resting = false
-			} else if d := gyro[i]; d > restGyro*4 || d < -restGyro*4 {
-				m.resting = false // even an unlearnt bias isn't that large
-			}
-		}
-	}
-	if !m.resting {
-		return
-	}
-	if m.biasN < restFirst {
-		m.biasN++
-		for i := range gyro {
-			m.bias[i] += (gyro[i] - m.bias[i]) / float32(m.biasN)
-		}
-		m.gRest += (an - m.gRest) / float32(m.biasN)
-		return
-	}
-	for i := range gyro {
-		m.bias[i] += (gyro[i] - m.bias[i]) * biasRate
-	}
-	// gravity as this accelerometer reads it: only while the strapdown calls
-	// the badge still (its test is 0.2 m/s² over 0.3 s). The app's rest test
-	// (|f| within 0.6 of g) passes through a gentle vertical stroke, and
-	// gRest learnt it as gravity: long mode then integrated nothing (MATH-1
-	// A4: 10 cm up in 1 s read −0.1 cm)
-	if m.nav.Still {
-		m.gRest += (an - m.gRest) * biasRate
-	}
-}
-
-// seedBias puts a still measurement's gyro bias into the motion state (the
-// Calibration page's, owner: "initially gyro is calibrated"); learnBias
-// carries on from it. The measurement takes seconds of stillness, so the
-// first estimate (restFirst samples) is always done by then.
+// seedBias puts a still measurement's gyro bias (the Calibration page's)
+// into both estimators.
 func (m *motion) seedBias(b [3]float32) {
-	m.bias = b
+	m.att.bias = b
+	m.kal.seedGyro(b)
 }
 
-// addStep adds one sample's step (m, badge axes) to the badge-frame
-// displacement and counts the strapdown's moving episodes (the console's
-// motion readout). No gate: strapdown r10 doesn't start a move on sensor
-// noise at rest (r3 did, 0.3 s at a time, which a gate had to hold back,
-// and the gate froze the paddle for half a second, then jumped it: owner,
-// TG-5 #2).
-func (m *motion) addStep(b [3]float32, still bool) {
-	if !still && m.wasStill {
-		m.movesN++
-	}
-	m.wasStill = still
-	for i := range b {
-		m.disp[i] += b[i]
+// shown is the Kalman position as the Motion page shows it (through the
+// bw low-pass).
+func (m *motion) shown() [3]float32 { return m.shKal.y }
+
+// usePrior hands a calibration put in use to both estimators: its gyro bias
+// to the attitude, the fit as the Kalman filter's prior (the samples arrive
+// corrected by it from then).
+func (m *motion) usePrior(fit *calib.Fit) {
+	m.att.bias = fit.GyroBias
+	m.kal.usePrior(fit)
+}
+
+// lowpass3 is a first-order low-pass on a 3-vector (conditioning: the
+// Motion page's output bandwidth, the specific force the demos feel).
+type lowpass3 struct{ y [3]float32 }
+
+func (l *lowpass3) step(x [3]float32, k float32) {
+	for i := range x {
+		l.y[i] += (x[i] - l.y[i]) * k
 	}
 }

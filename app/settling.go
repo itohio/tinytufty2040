@@ -12,7 +12,7 @@ import (
 const settlingText = "settling - hold still"
 
 // settling reports whether there is a motion state that hasn't started.
-func (m *motion) settling() bool { return m != nil && !m.settled }
+func (m *motion) settling() bool { return m != nil && !m.att.settled }
 
 // drawSettling writes settlingText centred near the bottom of a full-screen
 // view (x0, y0, w × h) while m settles. A constant string: nothing allocated.

@@ -193,8 +193,8 @@ func isqrt(x uint32) uint32 {
 // along the world's −Y.
 func (b *boids) camera() {
 	b.tanHalf = int32(math.Tan(float64(boidsFOVs[b.fov])*math.Pi/360)*boidsQ + 0.5)
-	if m := b.motion; m != nil && m.settled {
-		q := m.ahrs.Output()
+	if m := b.motion; m != nil && m.att.settled {
+		q := m.att.q()
 		b.look = toQ14(toWorld(q, [3]float32{0, 0, -1}))
 		b.right = toQ14(toWorld(q, [3]float32{1, 0, 0}))
 		b.up = toQ14(toWorld(q, [3]float32{0, 1, 0}))

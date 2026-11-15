@@ -2,6 +2,7 @@ package app
 
 import (
 	"math"
+	"strings"
 	"time"
 )
 
@@ -24,6 +25,7 @@ var helpLines = [...]string{
 	"led <0-100>, bl <10-100>, saver [0|1], solid [0-255]",
 	"stats, tiles, frames, mem, memshow [0|1]",
 	"light [raw|-1], tilt, motion, dump, version, help",
+	"motion [bw 20|10]",
 	"cal [clear | set ox oy oz sx sy sz gx gy gz]: the fit",
 }
 
@@ -116,7 +118,11 @@ func (a *App) exec(c command) {
 		a.calCommand(c.text)
 	case "version": // the firmware's build ID (tools/build)
 		a.log2("build ", a.cfg.BuildID)
-	case "motion": // the shared motion state as the demos read it (measurable at rest)
+	case "motion": // the Kalman position and attitude; motion bw 20|10
+		if c.text != "" && !a.motionSet(c.text) {
+			a.log("motion: bw 20|10")
+			return
+		}
 		a.motionReport()
 	case "help":
 		for _, l := range helpLines {
@@ -217,22 +223,39 @@ func (a *App) logTilt() {
 // motionReport logs the shared motion state the demos read: the world
 // position and the badge-frame displacement in µm (the Motion page shows
 // whole cm; the paddle moves 0.13 mm a pixel), how many samples the strapdown called rest since the last
-// report, and what moves on screen: Pong's paddle row (px).
+// report, and what moves on screen: Pong's paddle row (px) and the boids'
+// window offset (tenths of a cell).
 func (a *App) motionReport() {
 	m := a.motion
 	if m == nil {
 		a.log("motion: no IMU")
 		return
 	}
-	um := func(v float32) int { return int(v * 1e6) }
-	a.log(a.txtStat.reset().str("motion P ").int(um(m.nav.P[0])).str(" ").int(um(m.nav.P[1])).str(" ").int(um(m.nav.P[2])).
-		str(" um disp ").int(um(m.disp[0])).str(" ").int(um(m.disp[1])).str(" ").int(um(m.disp[2])).str(" um").String())
-	rest := 0
-	if m.sampleN > 0 {
-		rest = m.restN * 100 / m.sampleN
+	mm := func(v float32) int { return int(v * 1000) }
+	a.log(a.txtStat.reset().str("motion kal ").int(mm(m.kal.P[0])).str(" ").int(mm(m.kal.P[1])).str(" ").int(mm(m.kal.P[2])).str(" mm").String())
+	q := m.kal.f.Q // the filter's attitude and its rest flags
+	a.log(a.txtStat.reset().str("motion kq ").fixed(q[0], 4).str(" ").fixed(q[1], 4).str(" ").fixed(q[2], 4).str(" ").fixed(q[3], 4).
+		str(" s").int(btoi(m.kal.f.Still)).str(" c").int(btoi(m.kal.f.Calm)).str(" r").int(btoi(m.kal.f.Ready)).String())
+	a.log(a.txtStat.reset().str("motion bw ").str(bwWords[m.bw]).str(" settled ").int(btoi(m.att.settled)).String())
+}
+
+// the console's words for the Motion page's choices
+var (
+	bwWords = [...]string{bw20: "20", bw10: "10"}
+)
+
+// motionSet applies `motion mode …` or `motion follow …`; false for anything
+// else.
+func (a *App) motionSet(arg string) bool {
+	key, val, _ := strings.Cut(arg, " ")
+	switch key {
+	case "bw":
+		for i, w := range bwWords {
+			if w == val {
+				a.motion.bw = i
+				return true
+			}
+		}
 	}
-	a.log(a.txtStat.reset().str("rest ").int(rest).str("% of ").int(m.sampleN).str(" settled ").int(btoi(m.settled)).
-		str(" pad ").int(int(a.pong.pad[0] / (pongFix / 5))).
-		str(" moves ").int(m.movesN).String())
-	m.sampleN, m.restN, m.movesN = 0, 0, 0
+	return false
 }

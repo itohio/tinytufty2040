@@ -171,6 +171,7 @@ func (a *App) calLoad() {
 		return
 	}
 	a.calib.putInUse(f)
+	a.calPrior()
 	a.setCalSaved(calSavedInUse, nil)
 	a.log2("cal: the saved calibration is in use: ", f.Model.String())
 }
@@ -259,6 +260,15 @@ func (a *App) calSetCommand(s string) {
 	}
 	a.calib.putInUse(f)
 	a.calNewFitInUse()
+	a.calPrior()
 	a.log("cal set: in use")
 	a.calSave()
+}
+
+// calPrior hands the fit in use to the Kalman estimator as its prior (the
+// samples arrive corrected by it from now).
+func (a *App) calPrior() {
+	if a.motion != nil && a.calib != nil && a.calib.g.inUse {
+		a.motion.usePrior(&a.calib.g.use)
+	}
 }

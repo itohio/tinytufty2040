@@ -209,6 +209,12 @@ const (
 // they live as long as the App, their pages are built around them on demand.
 func (a *App) initDemos(cfg Config) {
 	imu := cfg.IMU
+	if imu {
+		// first, while the heap is one piece: the motion state holds the
+		// Kalman filter (2.9 KB in one block), and made after the demos it
+		// found no room (out of memory at boot)
+		a.motion = newMotion()
+	}
 	// one liquid engine for Water and Fire's fuel (fluid.go): Fire first, so
 	// Water holds it at boot
 	share := &liquidShare{fl: newFlipFluid()}
@@ -220,7 +226,6 @@ func (a *App) initDemos(cfg Config) {
 	a.menu = a.newMenu([]string{"Life", "Water", "Fire", "Pong", "Boids"},
 		[]previewer{a.life, a.water, a.fire, a.pong, a.boids})
 	if imu {
-		a.motion = newMotion()
 		a.motionDemo = newMotionDemo(a.motion)
 		a.pong.motion = a.motion // your paddle follows the badge up and down
 		// the boids' full view shows the settling notice

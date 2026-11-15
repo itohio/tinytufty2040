@@ -185,11 +185,12 @@ func TestPongPaddleFollowsPitch(t *testing.T) {
 }
 
 // Held still in the owner's hand (hand model v2), the paddle doesn't
-// jitter: within any second it moves less than a cell (0.75° of pitch). No
-// smoothing: over a minute it follows the hand's real slow tilt (v2: 1.5-1.9°
-// in 60 s, 2.0-2.6 cells of true pitch; the paddle 1.6-2.1), which is the
-// pitch it's meant to follow; smoothing at 0.5 s would only take that to
-// 1.2-1.4 cells for 500 ms of lag (PONG-PITCH-1 evidence).
+// jitter: within any second it strays less than a cell (0.75° of pitch)
+// from the hand's true pitch. It does follow the hand's real tilt, the
+// pitch it's meant to follow: the model's tremor alone tips the badge up to
+// 1.1 cells within a second, and over a minute its slow tilt 2.0-2.6 cells
+// (smoothing at 0.5 s would only trade that for 500 ms of lag: PONG-PITCH-1
+// evidence).
 func TestPongPitchStillHandKeepsThePaddle(t *testing.T) {
 	for seed := uint64(1); seed <= 3; seed++ {
 		r := newRig()
@@ -206,7 +207,8 @@ func TestPongPitchStillHandKeepsThePaddle(t *testing.T) {
 		}
 		p := r.a.pong
 		p.showFull()
-		var last [20]int32 // the paddle over the last second (20 frames)
+		var last [20]float64 // the paddle less the true pitch over the last second (20 frames), cells
+		const cellsPerRad = float64(pongH-pongPadLen) / pongTiltRange
 		n := 0
 		for i := range 60 * imuRate {
 			a, g := s.sample([3]float64{})
@@ -214,7 +216,7 @@ func TestPongPitchStillHandKeepsThePaddle(t *testing.T) {
 			if i%r.frameN != r.frameN-1 {
 				continue
 			}
-			last[n%len(last)] = p.pad[0]
+			last[n%len(last)] = float64(p.pad[0])/pongFix - s.th[0]*cellsPerRad // the hand's true pitch is its tremor angle about x
 			if n++; n < len(last) {
 				continue
 			}
@@ -222,8 +224,8 @@ func TestPongPitchStillHandKeepsThePaddle(t *testing.T) {
 			for _, v := range last {
 				lo, hi = min(lo, v), max(hi, v)
 			}
-			if d := float32(hi-lo) / pongFix; d >= 1 {
-				t.Fatalf("seed %d, %.1f s: the paddle moved %.2f cells within a second, want < 1", seed, float32(i)/imuRate, d)
+			if d := hi - lo; d >= 1 {
+				t.Fatalf("seed %d, %.1f s: the paddle strayed %.2f cells from the true pitch within a second, want < 1", seed, float32(i)/imuRate, d)
 			}
 		}
 	}

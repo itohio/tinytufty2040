@@ -130,8 +130,8 @@ func TestCalibrationSetsTheGyroBiasAndARecalibrates(t *testing.T) {
 	if a.calib.stage != calShowDone {
 		t.Fatalf("stage %d, want done", a.calib.stage)
 	}
-	if a.motion.bias != res.gyroBias || !a.calib.gyroSet {
-		t.Fatalf("the motion state's gyro bias %v after the calibration's %v (set %v), want it seeded", a.motion.bias, res.gyroBias, a.calib.gyroSet)
+	if a.motion.att.bias != res.gyroBias || !a.calib.gyroSet {
+		t.Fatalf("the motion state's gyro bias %v after the calibration's %v (set %v), want it seeded", a.motion.att.bias, res.gyroBias, a.calib.gyroSet)
 	}
 	a.Press(BtnA, false) // the page's focus is the view itself
 	frame()
