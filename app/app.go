@@ -22,6 +22,10 @@ type Hardware interface {
 	Light() uint16 // raw light-sensor ADC value, 0..65535
 	Battery() (volts float32, usb bool)
 	SetLED(percent int) // 0 = off
+	// BlinkLED blinks the user LED in hardware, on half of each period
+	// (0 stops it, back to SetLED's level): fast blinks that a frame can't
+	// time (a frame takes ~55 ms).
+	BlinkLED(period time.Duration)
 	SetBacklight(percent int)
 }
 
@@ -124,6 +128,9 @@ type App struct {
 	calRec                 [calRecordSize]byte // the saved calibration's record, read or written
 	calSaved               calSavedState       // what is saved (cal's first line)
 	calSavedErr            error               // why the saved one isn't used
+	calLEDOwned            bool                // the orientation calibration drives the LED (calibLED)
+	calLEDBlink            bool                // its fast blink runs
+	calLEDPct              int                 // the level it last set (-1: none yet)
 	motion                 *motion             // IMU fusion; nil without an IMU
 	calib                  *calibration        // the Calibration page's calibrator (with an IMU; runs from power-on)
 	// demo models: they outlive their pages (the Demos page's tiles run them)
@@ -382,6 +389,7 @@ func (a *App) Update(now time.Time) {
 		}
 		a.log("calibrated: gyro bias set")
 	}
+	a.calibLED(now)
 	if a.calib != nil && a.calib.g.fitN != a.calLogged { // each new fit goes to the log as numbers
 		a.calLogged = a.calib.g.fitN
 		a.calReport()

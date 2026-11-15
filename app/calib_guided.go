@@ -546,3 +546,62 @@ func (a *App) calReport() {
 		a.log("cal: no orientations measured (A, Orientations)")
 	}
 }
+
+// The orientation calibration's LED cue, so the badge can be calibrated
+// without watching the screen: in the picked orientation but not still yet,
+// or moved while measured, a 10 Hz hardware blink; measured, a 2 Hz blink
+// (frames time it: 250 ms half-periods); an orientation done, on for 1 s;
+// otherwise off. Off the page or not calibrating, the LED is its own
+// setting again.
+const (
+	calFastBlink = 100 * time.Millisecond // 10 Hz
+	calSlowHalf  = 250 * time.Millisecond // 2 Hz: on, then off, this long
+	calDoneOn    = time.Second
+)
+
+func (a *App) calibLED(now time.Time) {
+	if a.calib == nil {
+		return
+	}
+	g := &a.calib.g
+	if a.cur != a.calibPage || !a.calib.guiding() {
+		if a.calLEDOwned {
+			a.calLEDOwned = false
+			if a.calLEDBlink {
+				a.hw.BlinkLED(0)
+				a.calLEDBlink = false
+			}
+			a.applyLED()
+		}
+		return
+	}
+	if !a.calLEDOwned {
+		a.calLEDOwned, a.calLEDPct = true, -1
+	}
+	blink, pct := false, 0
+	switch g.stage {
+	case gHold, gMoved:
+		blink = true
+	case gMeasure:
+		if now.Sub(a.start)%(2*calSlowHalf) < calSlowHalf {
+			pct = 100
+		}
+	case gTaken, gAll:
+		if now.Sub(g.at) < calDoneOn {
+			pct = 100
+		}
+	}
+	if blink != a.calLEDBlink {
+		a.calLEDBlink = blink
+		if blink {
+			a.hw.BlinkLED(calFastBlink)
+			return
+		}
+		a.hw.BlinkLED(0)
+		a.calLEDPct = -1
+	}
+	if !blink && pct != a.calLEDPct {
+		a.calLEDPct = pct
+		a.hw.SetLED(pct)
+	}
+}

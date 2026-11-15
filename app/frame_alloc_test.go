@@ -15,6 +15,7 @@ func (testHW) Light() uint16            { return 1000 }
 func (testHW) Battery() (float32, bool) { return 3.9, false }
 func (testHW) SetLED(int)               {}
 func (testHW) SetBacklight(int)         {}
+func (testHW) BlinkLED(time.Duration)   {}
 
 // framedApp is the app with an IMU (every page, the Motion page too) and a
 // frame as the badge runs it: sensor sample, Update, three 80-row bands.

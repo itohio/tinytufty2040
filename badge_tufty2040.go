@@ -13,6 +13,7 @@ import (
 type badge struct {
 	light, vbat, vref machine.ADC
 	led, backlight    *pwmOut
+	ledPct            int // the LED's level (SetLED): where BlinkLED(0) returns
 }
 
 type pwmOut struct {
@@ -59,6 +60,26 @@ func (o *pwmOut) set(percent int) {
 	o.pwm.Set(o.ch, uint32(uint64(top)*uint64(percent*percent)/10000))
 }
 
+// blink runs a hardware blink of the given period at 50 % duty; 0 returns
+// to the 200 kHz brightness PWM at percent. A period the PWM can't reach
+// leaves the LED as it was.
+func (o *pwmOut) blink(period time.Duration, percent int) {
+	cfg := machine.PWMConfig{Period: 5_000}
+	if period > 0 {
+		cfg.Period = uint64(period.Nanoseconds())
+	}
+	if err := o.pwm.Configure(cfg); err != nil {
+		return
+	}
+	o.ch, _ = o.pwm.Channel(o.pin) // the pin back to the PWM block (it may be DC)
+	o.dc = false
+	if period > 0 {
+		o.pwm.Set(o.ch, o.pwm.Top()/2)
+		return
+	}
+	o.set(percent)
+}
+
 func newBadge() *badge {
 	machine.InitADC()
 	machine.SENSOR_POWER.Configure(machine.PinConfig{Mode: machine.PinOutput})
@@ -89,8 +110,14 @@ func (b *badge) Battery() (float32, bool) {
 	return float32(b.vbat.Get()) / 65535 * 3 * vdd, machine.VBUS_DETECT.Get()
 }
 
-func (b *badge) SetLED(p int)       { b.led.set(p) }
-func (b *badge) SetBacklight(p int) { b.backlight.set(p) }
+func (b *badge) SetLED(p int) { b.ledPct = p; b.led.set(p) }
+
+// BlinkLED blinks the LED in hardware: the PWM at the blink's period, on
+// half of it (TinyGo turns phase-correct on for periods past ~84 ms at
+// 200 MHz; up to ~168 ms). 0 goes back to the brightness PWM at the last
+// SetLED level.
+func (b *badge) BlinkLED(period time.Duration) { b.led.blink(period, b.ledPct) }
+func (b *badge) SetBacklight(p int)            { b.backlight.set(p) }
 
 // button turns a GPIO into app.Press events. Navigation keys fire on press
 // and auto-repeat as long presses, and report their held and released edges

@@ -50,6 +50,7 @@ func (h fakeHW) Light() uint16 {
 func (h fakeHW) Battery() (float32, bool) { return 3.92, true }
 func (h fakeHW) SetLED(p int)             { fmt.Println("hw: led", p) }
 func (h fakeHW) SetBacklight(p int)       { fmt.Println("hw: backlight", p) }
+func (h fakeHW) BlinkLED(d time.Duration) { fmt.Println("hw: led blink", d) }
 
 // durationAdd mirrors ui.DurationAdd, which is only built for TinyGo targets.
 func durationAdd(d, delta time.Duration) time.Duration { return d + delta*magnitude(d) }
