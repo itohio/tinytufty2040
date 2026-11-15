@@ -24,6 +24,19 @@ const (
 	pongTicks    = 2 // physics ticks per frame
 	pongServeVX  = 128
 	pongMaxVX    = 320
+	pongMinVX    = 64 // a wall's spin kick never slows the ball below this
+	// spin: the ball's clockwise surface speed, in the units of its velocity
+	// (1/256 cell per tick), kept ×pongSpinFix so it can fade slowly. A
+	// paddle hit adds the paddle's movement that tick ×pongPadGrip/4 (the
+	// ball's side drags with the paddle); a wall turns 1/pongWallGrip of it
+	// into horizontal speed (friction acts on the spin only: a ball without
+	// spin bounces as before) and loses that much; in flight it fades by
+	// 1/pongSpinFade per tick.
+	pongSpinFix  = 256
+	pongPadGrip  = 2
+	pongWallGrip = 2
+	pongSpinFade = 256
+	pongMaxSpin  = 160
 	pongPitch    = 3
 	// your paddle's full travel, bottom to top, is this much pitch around
 	// the neutral latched when PLAY starts (owner 2026-11-15: "30 degrees of
@@ -62,6 +75,8 @@ var pongDigits = [10][5]uint8{
 type pong struct {
 	bx, by, vx, vy int32
 	pad            [2]int32 // paddle tops (left, right)
+	padV           [2]int32 // each paddle's movement this tick (+ down)
+	spin           int32    // the ball's clockwise surface speed ×pongSpinFix
 	target         int32    // player's paddle target (top)
 	score          [2]int
 	ballHist       [3][2]int32 // previous exact ball positions (one per frame), newest first
@@ -93,6 +108,7 @@ func newPong() *pong {
 // serve puts the ball in the centre moving towards side dir (-1 left, +1 right).
 func (p *pong) serve(dir int32) {
 	p.bx, p.by = pongW/2*pongFix, pongH/2*pongFix
+	p.spin = 0
 	p.vx = dir * pongServeVX
 	p.vy = int32(rand32()&63) + 24
 	if rand32()&1 == 0 {
@@ -117,8 +133,11 @@ func (p *pong) step() {
 			}
 		}
 		d := min(max(goal-p.pad[side], -speed), speed)
+		was := p.pad[side]
 		p.pad[side] = min(max(p.pad[side]+d, 0), (pongH-pongPadLen)*pongFix)
+		p.padV[side] = p.pad[side] - was
 	}
+	p.spin -= p.spin / pongSpinFade // toward 0 from either side
 
 	prev := p.bx
 	p.bx += p.vx
@@ -126,8 +145,10 @@ func (p *pong) step() {
 	const bottom = (pongH - 1) * pongFix
 	if p.by < 0 {
 		p.by, p.vy = -p.by, -p.vy
+		p.wallSpin(-1) // the top wall meets the ball's top: it moves at +spin
 	} else if p.by > bottom {
 		p.by, p.vy = 2*bottom-p.by, -p.vy
+		p.wallSpin(1) // the bottom meets it, moving at −spin
 	}
 	// a paddle is hit when the ball crosses into its column this tick (a
 	// crossing test: at top speed the ball moves more than a cell per tick)
@@ -156,6 +177,29 @@ func (p *pong) hit(side int, face int32) {
 	vx += vx >> 4
 	p.vx = min(max(vx, -pongMaxVX), pongMaxVX)
 	p.vy = (off - pongPadLen/2*pongFix) >> 3
+	// the paddle's movement drags the side it meets: a left paddle moving
+	// down turns the ball anticlockwise, a right one clockwise
+	v := p.padV[side]
+	if side == 0 {
+		v = -v
+	}
+	p.spin = min(max(p.spin+v*pongPadGrip*pongSpinFix/4, -pongMaxSpin*pongSpinFix), pongMaxSpin*pongSpinFix)
+	p.vy += p.padV[side] / 4
+}
+
+// wallSpin is a wall's friction on the spin: the contact moves at
+// side*spin (side −1 top, +1 bottom), and the wall pushes the ball against
+// it, taking that from the spin; the ball keeps heading the way it was, at
+// pongMinVX to pongMaxVX.
+func (p *pong) wallSpin(side int32) {
+	kick := p.spin / pongWallGrip
+	p.spin -= kick
+	vx := p.vx + side*kick/pongSpinFix
+	if p.vx < 0 {
+		p.vx = -min(max(-vx, pongMinVX), pongMaxVX)
+		return
+	}
+	p.vx = min(max(vx, pongMinVX), pongMaxVX)
 }
 
 // point scores for side (0 left, 1 right); after pongWin points both reset.
