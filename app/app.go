@@ -144,12 +144,14 @@ type App struct {
 	lightForce             int // light <raw>: forced sensor reading, -1: the real sensor
 	health                 health
 	txtStat                textBuf
-	allocU, allocD, allocP int      // allocations in the last frame (ReportAllocs)
-	tiltDir                int      // gravity from the motion sensor (SetTilt)
-	tiltX, tiltY           float32  // the last in-plane gravity (screen x right, y down; m/s²), the tilt command
-	tilted                 bool     // SetTilt has given a direction
-	solid                  int      // grey level of a uniform test screen, -1: off
-	boot                   bootAnim // the gopher at power-up (gopher.go)
+	allocU, allocD, allocP int                            // allocations in the last frame (ReportAllocs)
+	tiltDir                int                            // gravity from the motion sensor (SetTilt)
+	tiltX, tiltY           float32                        // the last in-plane gravity (screen x right, y down; m/s²), the tilt command
+	tilted                 bool                           // SetTilt has given a direction
+	solid                  int                            // grey level of a uniform test screen, -1: off
+	boot                   bootAnim                       // the gopher at power-up (gopher.go)
+	editChoice             *widget.InteractiveLabelChoice // the choice being edited: B puts editFrom back
+	editFrom               int
 	overlay                *container.Overlay
 	imagePage              int       // index of the Image page (the plasma animates only there)
 	calibPage              int       // index of the Calibration page (-1 without an IMU)
@@ -664,6 +666,12 @@ func (a *App) enter(p *page) {
 		}
 	}
 	a.editing = true // a leaf editor was activated
+	if f, ok := p.nav.Current().(*field); ok {
+		if c, ok := f.child.(*widget.InteractiveLabelChoice); ok {
+			// a choice applies every step at once: B puts this back
+			a.editChoice, a.editFrom = c, c.Selector().Index()
+		}
+	}
 }
 
 func (a *App) endEdit() {
@@ -673,10 +681,14 @@ func (a *App) endEdit() {
 	p.nav.Back() // deactivates (OnDeactivate, OnExit) and clears the index
 	p.nav.Focus(idx)
 	a.editing = false
+	a.editChoice = nil
 }
 
 func (a *App) cancelEdit() {
 	a.page().nav.Current().Interact(ui.ESC)
+	if a.editChoice != nil {
+		a.editChoice.Selector().SetIndex(a.editFrom, true) // the value before the edit
+	}
 	a.endEdit()
 }
 

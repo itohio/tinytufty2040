@@ -351,3 +351,33 @@ func onScreen(b *boids, p [3]int32) bool {
 	x, y, ok := b.project(p)
 	return ok && x > -boidsScrQ && x < boidsScrQ && y > -boidsScrQ*boidsGridH/boidsGridW && y < boidsScrQ*boidsGridH/boidsGridW
 }
+
+// B cancels an edit back to the value before it: on the Boids page, A on
+// the count starts editing it, Up changes it (it applies at once), and B
+// puts the count from before the edit back, in the flock and on the page.
+func TestCancellingAnEditRestoresTheValueBeforeIt(t *testing.T) {
+	a, frame := framedApp()
+	a.showPage(a.pageIndex("Boids"))
+	frame()
+	b := a.boids
+	before := b.count
+	a.page().nav.Focus(0) // the count
+	a.Press(BtnA, false)
+	frame()
+	if !a.editing {
+		t.Fatal("A on the count didn't start editing it")
+	}
+	a.Press(BtnUp, false)
+	frame()
+	if b.count == before {
+		t.Fatal("Up while editing didn't change the count")
+	}
+	a.Press(BtnB, false)
+	frame()
+	if a.editing {
+		t.Fatal("B didn't end the edit")
+	}
+	if b.count != before {
+		t.Errorf("after B the count is %d boids, want %d (before the edit)", boidsN[b.count], boidsN[before])
+	}
+}
