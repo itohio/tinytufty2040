@@ -447,3 +447,31 @@ func TestCalibrationFramesDoNotAllocate(t *testing.T) {
 		}
 	}
 }
+
+// After a pause longer than the pages' idle timeout, the Calibration page's
+// first key still acts: up/down move the orientation highlight and A
+// opens the choice. The page is one view with no focus to show, so the
+// idle timeout clearing focus (as on list pages, where the first key only
+// brings the focus back) made a key vanish (two dropped presses on the
+// badge, each after a still pause). The containers time idleness by the
+// wall clock: the test shortens the page's timeout and sleeps past it.
+func TestCalibrationKeysActAfterAnIdlePause(t *testing.T) {
+	idle := func(a *App, frame func()) {
+		a.page().root.Timeout = 20 * time.Millisecond
+		time.Sleep(50 * time.Millisecond)
+		frame()
+	}
+	a, _, wait := orientApp(t)
+	idle(a, func() { wait(33 * time.Millisecond) })
+	a.Press(BtnDown, false)
+	if a.calib.g.sel != faceDown {
+		t.Fatalf("down after an idle pause: highlight %d, want screen down", a.calib.g.sel)
+	}
+	b, frame := framedApp()
+	frame()
+	idle(b, frame)
+	b.Press(BtnA, false)
+	if b.overlay.Top() == nil {
+		t.Fatal("A after an idle pause on the Calibration page: the choice didn't open")
+	}
+}

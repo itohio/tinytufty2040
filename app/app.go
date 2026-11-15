@@ -379,8 +379,11 @@ func (a *App) Update(now time.Time) {
 	if a.cur == a.imagePage { // only animate the plasma while it is visible
 		renderPlasma(a.plasma[:], plasmaW, plasmaH, a.phase)
 	}
-	if !a.editing {
-		a.page().root.Interact(ui.IDLE) // container idle timeout clears focus
+	// container idle timeout clears focus, so the first key after a pause
+	// only brings it back; not on the Calibration page: one view with no
+	// focus to show, where that key would vanish (up/down, A)
+	if !a.editing && a.cur != a.calibPage {
+		a.page().root.Interact(ui.IDLE)
 	}
 
 	a.frames++
