@@ -155,9 +155,10 @@ func (a *App) SetIMU(acc, gyro [3]float32, dt float32) {
 	}
 	if a.calib != nil { // the Calibration page's calibrator; the motion state runs on regardless
 		a.calib.add(acc, gyro, dt)
-		// a guided calibration in use corrects what the motion state gets;
-		// the calibrator keeps the raw samples (it measures them)
-		acc, gyro = a.calib.correct(acc, gyro)
+		// an orientation fit in use corrects the accelerometer samples the
+		// motion state gets; the calibrator keeps the raw ones (it measures
+		// them)
+		acc = a.calib.correct(acc)
 	}
 	m.samples++
 	m.learnBias(acc, gyro)
@@ -585,6 +586,14 @@ func (m *motion) learnBias(acc, gyro [3]float32) {
 	if m.nav.Still {
 		m.gRest += (an - m.gRest) * biasRate
 	}
+}
+
+// seedBias puts a still measurement's gyro bias into the motion state (the
+// Calibration page's, owner: "initially gyro is calibrated"); learnBias
+// carries on from it. The measurement takes seconds of stillness, so the
+// first estimate (restFirst samples) is always done by then.
+func (m *motion) seedBias(b [3]float32) {
+	m.bias = b
 }
 
 // addStep adds one sample's step (m, badge axes) to the badge-frame

@@ -20,7 +20,7 @@ func (a *calibAdapter) progress() float32                    { return a.c.Progre
 func (a *calibAdapter) reset()                               { a.c.Reset() }
 func (a *calibAdapter) thresholds() (acc, gyro float32)      { return a.c.Thresholds() }
 
-// pose is the finished run as a still pose for the guided calibration's
+// pose is the finished run as a still pose for the orientation calibration's
 // solver (calib.PoseOf); false until the run is done.
 func (a *calibAdapter) pose() (calib.Pose, bool) { return calib.PoseOf(&a.c) }
 

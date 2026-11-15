@@ -55,7 +55,7 @@ type calibrator interface {
 	stats(i int) (mean, spread float32)
 	// thresholds are the spreads under which each sensor counts as still
 	thresholds() (acc, gyro float32)
-	// pose is a finished run as a still pose (the guided calibration)
+	// pose is a finished run as a still pose (the orientation calibration)
 	pose() (calib.Pose, bool)
 }
 
@@ -90,6 +90,8 @@ const (
 	calPanelX   = 122 // the strips' panel: axis label, trace, state chip
 	calTraceX   = calPanelX + 18
 	calTraceW   = 132
+	calPanelXO  = 172 // the strips' panel during the orientation calibration (its table is wider)
+	calTraceWO  = 82
 	calTraceH   = 20
 	calChipX    = calTraceX + calTraceW + 4
 	calStripGap = 24 // strip to strip
@@ -125,10 +127,10 @@ const (
 	calWaitText = "Waiting for it to settle..."
 	calMeasText = "Measuring - keep still"
 	calMoveText = "Moved - starting again"
-	calDoneText = "Gyro measured (this pose)"
-	// what a single pose did and didn't, under the ring: its result is
-	// shown, not applied (the motion state learns its own gyro bias)
-	calDoneNote = "shown, not used: the|faces calibrate the|accelerometer and gyro"
+	calDoneText = "Gyro set (this pose)"
+	// what a single pose did and didn't, under the ring: it sets the gyro's
+	// bias in the motion state (motion.seedBias), not the accelerometer's
+	calDoneNote = "sets the gyro; choose|Orientations to calibrate|the accelerometer"
 	calPrompt   = "keep still"
 	calAgain    = "A: calibrate"
 )
@@ -149,7 +151,8 @@ type calibration struct {
 	stage    calStage
 	start    time.Time // when this calibration started (its first update)
 	movedAt  time.Time // the last time the calibrator reported a move
-	applied  bool      // this calibration's result is in the motion state
+	applied  bool      // this calibration's result is taken (its gyro bias seeded)
+	gyroSet  bool      // a still measurement's gyro bias is in the motion state
 
 	bands  [6]*widget.StatBand
 	target [6]float32 // each axis's slow average: the strip's centre
@@ -159,7 +162,7 @@ type calibration struct {
 	state  [6]uint8   // 0 ok, 1 drift, 2 noisy (calChips; the band's colour)
 	res    calResult  // the last completed calibration (its forecast on the done state)
 	txt    [3]textBuf // the forecast's values and line
-	g      guided     // the guided calibration on several faces
+	g      guided     // the orientation calibration
 }
 
 func newCalibration(c calibrator) *calibration {
@@ -318,15 +321,16 @@ func (k *calibration) line() (string, color.RGBA) {
 	return calInstr, colMuted
 }
 
-// guiding reports whether the page shows the guided calibration.
+// guiding reports whether the page shows the orientation calibration.
 func (k *calibration) guiding() bool { return k.g.stage != gOff }
 
-// pageCalib is the Calibration page: one view, which A acts on (act) and,
-// on a guided result, B too (back).
+// pageCalib is the Calibration page: one view, which A acts on (act),
+// up/down move the orientation highlight (steps) and, on a new fit, B
+// discards it (back).
 func (a *App) pageCalib() *page {
 	view := &calibView{WidgetBase: ui.NewWidgetBase(innerW, bodyH-12), k: a.calib, press: a.calibAct,
 		onB: func() bool {
-			if s := a.calib.g.stage; s != gResult && s != gRefused {
+			if s := a.calib.g.fitSt; !a.calib.guiding() || s != fitShown && s != fitRefused {
 				return false
 			}
 			a.calib.discard(a.now)
@@ -336,11 +340,10 @@ func (a *App) pageCalib() *page {
 	return a.newPageWith("Calib", layout.VList(0), view)
 }
 
-// calibAct is A on the Calibration page: on a guided result it uses the
-// fit; otherwise it offers the three calibrations (the highlight on
-// 3 faces).
+// calibAct is A on the Calibration page: on a new fit it uses it;
+// otherwise it offers the calibrations (the highlight on the orientations).
 func (a *App) calibAct() {
-	if a.calib.g.stage == gResult {
+	if a.calib.guiding() && a.calib.g.fitSt == fitShown {
 		a.calib.useFit()
 		a.log2("calibration in use: ", a.calib.g.fit.Model.String())
 		return
@@ -365,9 +368,19 @@ type calibView struct {
 // demo tile (App.enter).
 func (v *calibView) activate() { v.press() }
 
-// backs is B on the page: true when the page took it (a guided result
+// backs is B on the page: true when the page took it (a new fit
 // discarded), so it doesn't go back a page.
 func (v *calibView) backs() bool { return v.onB() }
+
+// steps is up/down on the page: during the orientation calibration they
+// move its highlight (true: the page took the key); otherwise focus moves.
+func (v *calibView) steps(up bool) bool {
+	if !v.k.guiding() {
+		return false
+	}
+	v.k.step(up)
+	return true
+}
 
 func (v *calibView) Draw(ctx ui.Context) {
 	d := ctx.D()
@@ -377,52 +390,64 @@ func (v *calibView) Draw(ctx ui.Context) {
 	ui.DrawText(d, fontBody, x0+(int16(v.Width)-textWidth(fontBody, s))/2, y0+9, s, c)
 	fillRect(d, x0, y0+15, int16(v.Width), 1, calTrack)
 
-	// the ring: the main cue
-	ring := k.ring
-	guided := k.guiding()
-	if k.stage == calShowDone && !guided || guided && (k.g.stage >= gResult || k.g.stage == gFaceDone) {
-		ring = k.ringDone
-	}
-	v.ctx = ui.NewContext(d, calRingD, calRingD, x0+calRingX, y0+calRingY)
-	ring.Draw(&v.ctx)
-	cx := x0 + calRingX + calRingD/2
-	w := calStateWords[k.stage]
-	if guided {
-		w = ""
-		if int(k.g.stage) < len(gWords) {
-			w = gWords[k.g.stage]
+	// the orientation calibration takes the ring's column for its table
+	if k.guiding() {
+		v.guidedPanel(d, x0, y0+18)
+	} else {
+		// the ring: the main cue
+		ring := k.ring
+		if k.stage == calShowDone {
+			ring = k.ringDone
+		}
+		v.ctx = ui.NewContext(d, calRingD, calRingD, x0+calRingX, y0+calRingY)
+		ring.Draw(&v.ctx)
+		cx := x0 + calRingX + calRingD/2
+		if w := calStateWords[k.stage]; w != "" {
+			ui.DrawText(d, fontSmall, cx-textWidth(fontSmall, w)/2, y0+calRingY+calRingD/2+18, w, calChrome)
+		}
+		if k.stage == calShowDone {
+			v.doneNote(d, x0, y0+calRingY+calRingD+6)
+		} else {
+			ui.DrawText(d, fontBody, cx-textWidth(fontBody, calPrompt)/2, y0+calRingY+calRingD+22, calPrompt, calThr)
 		}
 	}
-	if w != "" {
-		ui.DrawText(d, fontSmall, cx-textWidth(fontSmall, w)/2, y0+calRingY+calRingD/2+18, w, calChrome)
-	}
-	if guided {
-		v.guidedPanel(d, x0, y0+calRingY+calRingD+6)
-	} else if k.stage == calShowDone {
-		v.doneNote(d, x0, y0+calRingY+calRingD+6)
-	} else {
-		ui.DrawText(d, fontBody, cx-textWidth(fontBody, calPrompt)/2, y0+calRingY+calRingD+22, calPrompt, calThr)
-	}
 
-	// the strips: a legend, then accelerometer and gyro, three each
-	fillRect(d, x0+calPanelX-6, y0+20, 1, int16(v.Height)-20, calTrack)
-	v.legend(d, x0+calPanelX, y0+27)
+	// the strips: a legend, then accelerometer and gyro, three each; the
+	// orientation calibration narrows them for its table (and drops the
+	// legend, which the single-pose page shows)
+	px, tw := int16(calPanelX), int16(calTraceW)
+	if k.guiding() {
+		px, tw = calPanelXO, calTraceWO
+	}
+	tx := px + calTraceX - calPanelX
+	chipX := tx + tw + 4
+	fillRect(d, x0+px-6, y0+20, 1, int16(v.Height)-20, calTrack)
+	if !k.guiding() {
+		v.legend(d, x0+px, y0+27)
+	}
 	// the strips plot the deviation from each axis's slow average against
 	// the stillness threshold (the zone is ±thr): no absolute unit
-	ui.DrawText(d, fontSmall, x0+calChipX-16, y0+27, "acc +-thr", calChrome)
-	ui.DrawText(d, fontSmall, x0+calChipX-20, y0+calStripY(3)-4, "gyro +-thr", calChrome)
-	fillRect(d, x0+calTraceX, y0+calStripY(3)-7, calTraceW-20, 1, calTrack)
-	fillRect(d, x0+calPanelX-3, y0+calStripY(0), 2, calStripY(2)+calTraceH-calStripY(0), calAccC)
-	fillRect(d, x0+calPanelX-3, y0+calStripY(3), 2, calStripY(5)+calTraceH-calStripY(3), calGyroC)
+	ui.DrawText(d, fontSmall, x0+chipX-16, y0+27, "acc +-thr", calChrome)
+	ui.DrawText(d, fontSmall, x0+chipX-20, y0+calStripY(3)-4, "gyro +-thr", calChrome)
+	lx, lw := tx, tw-20 // the gyro section's rule, after "gyro: set"
+	if k.gyroSet {
+		ui.DrawText(d, fontSmall, x0+px, y0+calStripY(3)-4, gGyroSetText, calOK)
+		end := px + textWidth(fontSmall, gGyroSetText) + 4
+		lx, lw = end, tx+tw-20-end
+	}
+	fillRect(d, x0+lx, y0+calStripY(3)-7, lw, 1, calTrack)
+	fillRect(d, x0+px-3, y0+calStripY(0), 2, calStripY(2)+calTraceH-calStripY(0), calAccC)
+	fillRect(d, x0+px-3, y0+calStripY(3), 2, calStripY(5)+calTraceH-calStripY(3), calGyroC)
 	for i, b := range k.bands {
 		y := y0 + calStripY(i)
-		ui.DrawText(d, fontBody, x0+calPanelX, y+calTraceH/2+4, calAxisNames[i], calChrome)
-		v.bctx[i] = ui.NewContext(d, calTraceW, calTraceH, x0+calTraceX, y)
+		ui.DrawText(d, fontBody, x0+px, y+calTraceH/2+4, calAxisNames[i], calChrome)
+		b.Width = uint16(tw) // a band draws its newest Width columns
+		v.bctx[i] = ui.NewContext(d, uint16(tw), calTraceH, x0+tx, y)
 		b.Draw(&v.bctx[i])
 		st := k.state[i]
 		col := [3]color.RGBA{calOK, calWarnC, calBadC}[st]
-		fillRect(d, x0+calChipX, y+calTraceH/2-5, 4, 4, col)
-		ui.DrawText(d, fontSmall, x0+calChipX, y+calTraceH/2+6, calChips[st], col)
+		fillRect(d, x0+chipX, y+calTraceH/2-5, 4, 4, col)
+		ui.DrawText(d, fontSmall, x0+chipX, y+calTraceH/2+6, calChips[st], col)
 	}
 }
 

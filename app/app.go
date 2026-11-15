@@ -362,10 +362,15 @@ func (a *App) Update(now time.Time) {
 			}
 		}
 	}
-	// the Calibration page: its stage and strips; a result is shown, not
-	// applied (nothing into the shared motion state until strapdown r11)
+	// the Calibration page: its stage and strips; a completed still
+	// measurement sets the gyro's bias in the motion state (owner: "initially
+	// gyro is calibrated"; the motion state's own learning carries on)
 	if a.calib != nil && a.calib.update(now) {
-		a.log("calibrated")
+		if a.motion != nil {
+			a.motion.seedBias(a.calib.res.gyroBias)
+			a.calib.gyroSet = true
+		}
+		a.log("calibrated: gyro bias set")
 	}
 	if a.full != nil {
 		w, h := a.full.Size()
@@ -445,10 +450,10 @@ func (a *App) footerText() string {
 		t.str("EDIT up/dn  A ok  B cancel")
 	case a.motion.settling():
 		t.str(settlingText)
-	case a.cur == a.calibPage && a.calib.g.stage == gResult:
-		t.str("A use it  B discard")
-	case a.cur == a.calibPage && a.calib.g.stage == gInUse:
-		t.str("A calibrate again  C page")
+	case a.cur == a.calibPage && a.calib.guiding() && a.calib.g.fitSt == fitShown:
+		t.str("up/dn choose  A use it  B discard")
+	case a.cur == a.calibPage && a.calib.guiding():
+		t.str("up/dn choose  A calibrate  C page")
 	default:
 		t.str("up/dn focus  A ok  B back  C page")
 	}
@@ -515,6 +520,11 @@ func (a *App) Press(b Button, long bool) {
 			}
 			p.nav.Current().Interact(cmd)
 			return
+		}
+		if p.nav.Depth() == 1 && !p.root.Active() {
+			if st, ok := p.nav.Current().(interface{ steps(up bool) bool }); ok && st.steps(b == BtnUp) {
+				return // the page took it (the Calibration page's orientations)
+			}
 		}
 		if b == BtnUp {
 			p.nav.Prev()

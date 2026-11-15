@@ -14,7 +14,7 @@ type scriptedCal struct {
 	res    calResult
 	n      int // samples fed
 	resets int
-	ps     calib.Pose // the pose a done run gives (the guided calibration)
+	ps     calib.Pose // the pose a done run gives (the orientation calibration)
 	mean   [6]float32 // the axes' windowed means (stats)
 	spread float32    // their spread (0: 0.01, still)
 }
@@ -114,29 +114,29 @@ func TestNoIMUNoCalibrationPage(t *testing.T) {
 	}
 }
 
-// A completed calibration is shown, not applied: the shared motion state
-// keeps its own gyro bias (nothing goes into it until strapdown r11,
-// which seeding needs). A on the page offers the calibrations with the
-// highlight on 3 faces: up and A pick "This pose", which
-// starts a new single-pose calibration at once, with no edit mode.
-func TestCalibrationIsShownNotAppliedAndARecalibrates(t *testing.T) {
+// A completed still measurement sets the gyro's bias in the motion state
+// (owner: "initially gyro is calibrated"; it seeds the motion state's own
+// learning). A on the page offers the calibrations with the highlight on
+// the orientations: up and A pick "This pose", which starts a new
+// single-pose calibration at once, with no edit mode.
+func TestCalibrationSetsTheGyroBiasAndARecalibrates(t *testing.T) {
 	a, frame := framedApp()
-	// a bias unlike the gyro framedApp feeds, which the motion state learns
-	// at rest on its own
-	res := calResult{gyroBias: [3]float32{0.3, 0.3, 0.3}}
+	// a bias unlike the gyro framedApp feeds, which the motion state would
+	// not learn on its own
+	res := calResult{gyroBias: [3]float32{0.03, -0.02, 0.01}}
 	c := &scriptedCal{ph: calDone, res: res}
 	a.calib.c = c
 	frame()
 	if a.calib.stage != calShowDone {
 		t.Fatalf("stage %d, want done", a.calib.stage)
 	}
-	if a.motion.bias == res.gyroBias {
-		t.Fatalf("the calibration's bias %v went into the motion state", res.gyroBias)
+	if a.motion.bias != res.gyroBias || !a.calib.gyroSet {
+		t.Fatalf("the motion state's gyro bias %v after the calibration's %v (set %v), want it seeded", a.motion.bias, res.gyroBias, a.calib.gyroSet)
 	}
 	a.Press(BtnA, false) // the page's focus is the view itself
 	frame()
 	if a.overlay.Top() == nil || a.calDialog.Choice() != 1 {
-		t.Fatalf("A on the Calibration page: the choice open %v, highlight %d (want open, on 3 faces)", a.overlay.Top() != nil, a.calDialog.Choice())
+		t.Fatalf("A on the Calibration page: the choice open %v, highlight %d (want open, on the orientations)", a.overlay.Top() != nil, a.calDialog.Choice())
 	}
 	for round := 1; round <= 2; round++ {
 		if round == 2 {
@@ -156,34 +156,37 @@ func TestCalibrationIsShownNotAppliedAndARecalibrates(t *testing.T) {
 	}
 }
 
-// facePose is a still pose on face f of a sensor with offset off and gyro
-// bias gb (m/s², rad/s), its noise well under the stillness thresholds.
-func facePose(f calFace, off, gb [3]float32) calib.Pose {
-	up := [6][3]float32{{0, 0, 1}, {0, 0, -1}, {0, 1, 0}, {0, -1, 0}, {-1, 0, 0}, {1, 0, 0}}[f]
+// faceUp is each orientation's gravity reaction, unit, in badge axes.
+var faceUnit = [6][3]float32{{0, 0, 1}, {0, 0, -1}, {0, 1, 0}, {0, -1, 0}, {-1, 0, 0}, {1, 0, 0}}
+
+// facePose is a still pose in orientation f of a sensor with offset off,
+// scale sc and gyro bias gb (m/s², ratio, rad/s), its noise well under the
+// stillness thresholds.
+func facePose(f calFace, off, sc, gb [3]float32) calib.Pose {
 	var p calib.Pose
 	for i := range 3 {
-		p.Accel[i] = up[i]*gravity + off[i]
+		p.Accel[i] = sc[i]*faceUnit[f][i]*gravity + off[i]
 		p.Gyro[i] = gb[i]
 		p.AccelNoise[i], p.GyroNoise[i] = 0.01, 0.0005
 	}
 	return p
 }
 
-// guidedApp opens the page's choice and starts a guided calibration
-// (pick: 0 up from 3 faces is This pose, 1 three faces, 2 six faces).
-func guidedApp(t *testing.T, faces int) (*App, *scriptedCal, func(time.Duration)) {
+var unitScale = [3]float32{1, 1, 1}
+
+// orientApp opens the page's choice and starts the orientation calibration
+// (the highlight's default), the badge lying flat, screen up.
+func orientApp(t *testing.T) (*App, *scriptedCal, func(time.Duration)) {
 	a, frame := framedApp()
 	c := &scriptedCal{ph: calWaiting}
+	c.mean = [6]float32{0, 0, gravity}
 	a.calib.c = c
 	frame()
 	a.Press(BtnA, false)
-	if faces == 6 {
-		a.Press(BtnDown, false)
-	}
 	a.Press(BtnA, false)
 	frame()
-	if a.calib.g.stage != gAsk {
-		t.Fatalf("after picking %d faces: guided stage %d, want asking", faces, a.calib.g.stage)
+	if !a.calib.guiding() || a.calib.g.sel != faceUp {
+		t.Fatalf("after picking the orientations: stage %d, highlight %d (want running, on screen up)", a.calib.g.stage, a.calib.g.sel)
 	}
 	wait := func(d time.Duration) {
 		for e := time.Duration(0); e < d; e += 33 * time.Millisecond {
@@ -193,88 +196,174 @@ func guidedApp(t *testing.T, faces int) (*App, *scriptedCal, func(time.Duration)
 	return a, c, wait
 }
 
-// lay finishes one run of the calibrator on face f (what the badge lying
-// still on f gives) and lets the page take it.
-func lay(c *scriptedCal, wait func(time.Duration), f calFace, off, gb [3]float32) {
-	c.ps, c.ph = facePose(f, off, gb), calDone
-	wait(40 * time.Millisecond)
-	wait(1600 * time.Millisecond) // past "Face k done" and the other held messages (gHoldFor)
+// lieIn lays the badge in orientation f (the strips' means), still.
+func lieIn(c *scriptedCal, f calFace) {
+	for i := range 3 {
+		c.mean[i] = faceUnit[f][i] * gravity
+	}
 }
 
-// Three faces (the default) fit the accelerometer's offsets and the
-// gyro's bias; the page says which face it wants next and refuses a face
-// already done, a done face drops off the list, and the edge opposite the
-// UP/DOWN buttons counts for that edge (any order; the face comes from
-// gravity).
-func TestGuidedCalibrationThreeFaces(t *testing.T) {
-	a, c, wait := guidedApp(t, 3)
-	off := [3]float32{0.12, -0.25, 0.31} // 12, -25, 32 mg
-	gb := [3]float32{0.004, -0.002, 0.001}
-	g := &a.calib.g
-	if s, _ := a.calib.line(); s != "Face 1 of 3: lay it flat, screen up" {
-		t.Fatalf("first ask %q", s)
+// choose moves the highlight to f with down.
+func choose(t *testing.T, a *App, f calFace) {
+	t.Helper()
+	for range 6 {
+		if a.calib.g.sel == f {
+			return
+		}
+		a.Press(BtnDown, false)
 	}
-	lay(c, wait, faceUp, off, gb)
-	lay(c, wait, faceUp, off, gb) // the same face again
-	if g.n != 1 {
-		t.Fatalf("a face already done counted: %d faces", g.n)
-	}
-	if s, _ := a.calib.line(); s != "Face 2 of 3: lay it on the up/down-button edge" {
-		t.Fatalf("after one face: %q", s)
-	}
-	lay(c, wait, faceOpposite, off, gb) // the other edge: it counts for the side
-	lay(c, wait, faceArrows, off, gb)   // and then that side is done
-	if g.n != 2 {
-		t.Fatalf("after the opposite edge and the up/down edge: %d faces, want 2", g.n)
-	}
-	c.ps, c.ph = facePose(faceUpright, off, gb), calDone
+	t.Fatalf("down never reached orientation %d", f)
+}
+
+// measure lays the badge in f, lets a calibrator run finish there with the
+// sensor's pose and waits past the held messages.
+func measure(c *scriptedCal, wait func(time.Duration), f calFace, off, sc, gb [3]float32) {
+	lieIn(c, f)
 	wait(100 * time.Millisecond)
-	if g.stage != gResult {
-		t.Fatalf("three faces: stage %d, want the result", g.stage)
+	c.ps, c.ph = facePose(f, off, sc, gb), calDone
+	wait(40 * time.Millisecond)
+	wait(1600 * time.Millisecond) // past "Done: ..." and the other held messages (gHoldFor)
+}
+
+// up/down pick the orientation; only the one picked is measured: placed
+// otherwise the page asks for it, a run that ends in another orientation
+// isn't counted, and once one is done the highlight moves to the next one
+// not done.
+func TestOrientationsUpDownPickAndOnlyThePickedIsTaken(t *testing.T) {
+	a, c, wait := orientApp(t)
+	g := &a.calib.g
+	lieIn(c, faceUpright)
+	wait(100 * time.Millisecond)
+	if s, _ := a.calib.line(); s != "Lay it flat, screen up" {
+		t.Fatalf("screen up picked, the badge upright: %q", s)
+	}
+	a.Press(BtnDown, false)
+	if g.sel != faceDown {
+		t.Fatalf("down: highlight %d, want screen down", g.sel)
+	}
+	a.Press(BtnUp, false)
+	a.Press(BtnUp, false)
+	if g.sel != faceOpposite {
+		t.Fatalf("up twice from screen down: highlight %d, want the opposite edge (wrapping)", g.sel)
+	}
+	choose(t, a, faceDown)
+	measure(c, wait, faceUp, [3]float32{}, unitScale, [3]float32{}) // it lies screen up instead
+	if g.done != [6]bool{} {
+		t.Fatalf("a run in screen up counted for screen down: %v", g.done)
+	}
+	measure(c, wait, faceDown, [3]float32{}, unitScale, [3]float32{})
+	if !g.done[faceDown] || g.sel != faceUpright {
+		t.Fatalf("screen down measured: done %v, highlight %d (want it done, the highlight on upright)", g.done, g.sel)
+	}
+}
+
+// Three orientations on different axes fit the offsets; two axes aren't
+// enough; all six (each axis both ways) fit the scales too.
+func TestOrientationsFitOffsetsOnThreeAxesAndScalesOnSix(t *testing.T) {
+	off := [3]float32{0.12, -0.25, 0.31}
+	sc := [3]float32{1.02, 0.97, 1.01}
+	gb := [3]float32{0.004, -0.002, 0.001}
+	a, c, wait := orientApp(t)
+	g := &a.calib.g
+	for _, f := range []calFace{faceUp, faceDown, faceUpright} { // z both ways and y: two axes
+		choose(t, a, f)
+		measure(c, wait, f, off, unitScale, gb)
+	}
+	if g.fitSt != fitNone {
+		t.Fatalf("two axes: fit state %d, want none", g.fitSt)
+	}
+	choose(t, a, faceArrows)
+	measure(c, wait, faceArrows, off, unitScale, gb)
+	if g.fitSt != fitShown || g.fit.Model != calib.OffsetOnly {
+		t.Fatalf("three axes: fit state %d model %v, want an offsets fit shown", g.fitSt, g.fit.Model)
 	}
 	for i := range 3 {
 		if d := g.fit.Offset[i] - off[i]; d > 0.002 || d < -0.002 {
 			t.Errorf("axis %d: offset %.4f, want %.4f", i, g.fit.Offset[i], off[i])
 		}
-		if d := g.fit.GyroBias[i] - gb[i]; d > 1e-5 || d < -1e-5 {
-			t.Errorf("axis %d: gyro bias %.5f, want %.5f", i, g.fit.GyroBias[i], gb[i])
+	}
+	a2, c2, wait2 := orientApp(t)
+	g2 := &a2.calib.g
+	for f := calFace(0); f < 6; f++ {
+		choose(t, a2, f)
+		measure(c2, wait2, f, off, sc, gb)
+	}
+	if g2.fitSt != fitShown || g2.fit.Model != calib.OffsetScale {
+		t.Fatalf("all six: fit state %d model %v, want offsets and scales", g2.fitSt, g2.fit.Model)
+	}
+	for i := range 3 {
+		if d := g2.fit.Offset[i] - off[i]; d > 0.005 || d < -0.005 {
+			t.Errorf("six, axis %d: offset %.4f, want %.4f", i, g2.fit.Offset[i], off[i])
+		}
+		if d := g2.fit.Scale[i] - sc[i]; d > 0.002 || d < -0.002 {
+			t.Errorf("six, axis %d: scale %.4f, want %.4f", i, g2.fit.Scale[i], sc[i])
 		}
 	}
-	if s, _ := a.calib.line(); s != "Calibrated on 3 faces (offsets only)" {
-		t.Fatalf("result line %q", s)
+	if s, _ := a2.calib.line(); s != gAllText {
+		t.Fatalf("all six: %q", s)
+	}
+}
+
+// The table: for every orientation done, gravity as measured minus 1 g
+// (raw: an axis's scale and offset show; fitted: near 0), and the spread
+// across orientations (owner: "how much the gravity pointing down actually
+// changes when i change the orientation").
+func TestOrientationTableShowsGravitysDeviationRawAndFitted(t *testing.T) {
+	off := [3]float32{0, 0, 0.1}
+	sc := [3]float32{1.02, 0.97, 1.0}
+	a, c, wait := orientApp(t)
+	g := &a.calib.g
+	for f := calFace(0); f < 6; f++ {
+		choose(t, a, f)
+		measure(c, wait, f, off, sc, [3]float32{})
+	}
+	// raw: x reads 1.02 g both ways, y 0.97 g, z 1 g ± the 0.1 m/s² offset
+	want := [6]float32{0.1, -0.1, -0.03 * gravity, -0.03 * gravity, 0.02 * gravity, 0.02 * gravity}
+	for f := calFace(0); f < 6; f++ {
+		if d := g.gDev(f, false) - want[f]; d > 0.002 || d < -0.002 {
+			t.Errorf("%s raw: %.4f m/s² from 1 g, want %.4f", calFaceShort[f], g.gDev(f, false), want[f])
+		}
+		if fv := g.gDev(f, true); fv > 0.005 || fv < -0.005 {
+			t.Errorf("%s fitted: %.4f m/s² from 1 g, want about 0", calFaceShort[f], fv)
+		}
+	}
+	// the spread the page shows: max − min of the raw deviations, 50 mg
+	lo, hi := float32(0), float32(0)
+	for f := calFace(0); f < 6; f++ {
+		lo, hi = minmax(int(f), g.gDev(f, false), lo, hi)
+	}
+	if m := mg(hi - lo); m != 50 {
+		t.Fatalf("raw spread %d mg, want 50 (1.02 g vs 0.97 g)", m)
 	}
 }
 
 // A pose that wasn't still is refused (the solver's stillness thresholds):
-// it isn't counted and the same face is asked for again.
-func TestGuidedCalibrationRefusesAMovingPose(t *testing.T) {
-	a, c, wait := guidedApp(t, 3)
-	p := facePose(faceUp, [3]float32{}, [3]float32{})
+// it isn't counted and the same orientation stays picked.
+func TestOrientationsRefuseAMovingPose(t *testing.T) {
+	a, c, wait := orientApp(t)
+	p := facePose(faceUp, [3]float32{}, unitScale, [3]float32{})
 	p.AccelNoise = [3]float32{0.5, 0.5, 0.5}
 	c.ps, c.ph = p, calDone
 	wait(100 * time.Millisecond)
-	if g := &a.calib.g; g.stage != gNotStill || g.n != 0 {
-		t.Fatalf("a moving pose: stage %d, %d faces (want not still, 0)", g.stage, g.n)
-	}
-	wait(1600 * time.Millisecond)
-	if s, _ := a.calib.line(); s != "Face 1 of 3: lay it flat, screen up" {
-		t.Fatalf("after the refusal: %q", s)
+	if g := &a.calib.g; g.stage != gNotStill || g.done[faceUp] || g.sel != faceUp {
+		t.Fatalf("a moving pose: stage %d, done %v, highlight %d (want not still, nothing done, still screen up)", g.stage, g.done, g.sel)
 	}
 }
 
-// A on the result uses the fit: from then the samples the motion state gets
-// are corrected (until power-off); B instead drops it and they stay raw.
-func TestGuidedCalibrationUseCorrectsAndDiscardDoesNot(t *testing.T) {
+// A on a fit uses it: from then the accelerometer samples the motion state
+// gets are corrected (until power-off); B instead drops it and they stay
+// raw, and the page stays.
+func TestOrientationFitUseCorrectsAndDiscardDoesNot(t *testing.T) {
 	off := [3]float32{0.2, -0.1, 0.3}
-	gb := [3]float32{0.01, 0, 0}
 	raw := [3]float32{off[0], gravity + off[1], off[2]} // upright, still
 	for _, use := range []bool{true, false} {
-		a, c, wait := guidedApp(t, 3)
-		for _, f := range []calFace{faceUp, faceArrows, faceUpright} {
-			lay(c, wait, f, off, gb)
+		a, c, wait := orientApp(t)
+		for _, f := range []calFace{faceUp, faceUpright, faceArrows} {
+			choose(t, a, f)
+			measure(c, wait, f, off, unitScale, [3]float32{})
 		}
-		if a.calib.g.stage != gResult {
-			t.Fatalf("stage %d, want the result", a.calib.g.stage)
+		if a.calib.g.fitSt != fitShown {
+			t.Fatalf("fit state %d, want a fit shown", a.calib.g.fitSt)
 		}
 		if use {
 			a.Press(BtnA, false)
@@ -282,16 +371,16 @@ func TestGuidedCalibrationUseCorrectsAndDiscardDoesNot(t *testing.T) {
 			a.Press(BtnB, false)
 		}
 		wait(100 * time.Millisecond)
-		acc, gyro := a.calib.correct(raw, gb)
-		corrected := acc[1] > gravity-0.01 && acc[1] < gravity+0.01 && acc[0] < 0.01 && acc[0] > -0.01 && gyro[0] < 1e-4
+		acc := a.calib.correct(raw)
+		corrected := acc[1] > gravity-0.01 && acc[1] < gravity+0.01 && acc[0] < 0.01 && acc[0] > -0.01
 		if use && !corrected {
-			t.Fatalf("A on the result: the sample %v / %v reaches the motion state as %v / %v, want the offsets and bias out", raw, gb, acc, gyro)
+			t.Fatalf("A on the fit: the sample %v reaches the motion state as %v, want the offsets out", raw, acc)
 		}
 		if !use && (corrected || acc != raw) {
-			t.Fatalf("B on the result: the sample became %v, want it raw %v", acc, raw)
+			t.Fatalf("B on the fit: the sample became %v, want it raw %v", acc, raw)
 		}
 		if !use && a.page().name != "Calib" {
-			t.Fatalf("B on the result left the page for %s", a.page().name)
+			t.Fatalf("B on the fit left the page for %s", a.page().name)
 		}
 	}
 }
@@ -328,8 +417,9 @@ func TestCalibrationStripsDoNotReadATurnAsDrift(t *testing.T) {
 	}
 }
 
-// The page's frames allocate nothing in any stage (owner: no allocations
-// after setup).
+// The page's frames allocate nothing in any stage, the orientation
+// calibration's table and fit included (owner: no allocations after
+// setup).
 func TestCalibrationFramesDoNotAllocate(t *testing.T) {
 	needMallocCount(t)
 	a, frame := framedApp()
@@ -340,6 +430,20 @@ func TestCalibrationFramesDoNotAllocate(t *testing.T) {
 		c.ph = ph
 		if n := testing.AllocsPerRun(30, frame); n != 0 {
 			t.Errorf("phase %d: %.0f allocations per frame on the Calibration page", ph, n)
+		}
+	}
+	a, c, wait := orientApp(t)
+	off, sc := [3]float32{0.1, -0.2, 0.3}, [3]float32{1.02, 0.97, 1.01}
+	for f := calFace(0); f < 5; f++ {
+		choose(t, a, f)
+		measure(c, wait, f, off, sc, [3]float32{})
+	}
+	tick := func() { wait(33 * time.Millisecond) }
+	lieIn(c, faceOpposite)
+	for _, ph := range []calPhase{calWaiting, calMeasuring, calMoved} {
+		c.ph, c.prog = ph, 0.6
+		if n := testing.AllocsPerRun(30, tick); n != 0 {
+			t.Errorf("orientations, phase %d (five done, a fit shown): %.0f allocations per frame", ph, n)
 		}
 	}
 }

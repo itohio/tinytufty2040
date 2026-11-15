@@ -35,6 +35,16 @@ func (t *textBuf) int(v int) *textBuf {
 	return t.str(unsafe.String(&tmp[i], len(tmp)-i))
 }
 
+// title writes s with its first letter in upper case (ASCII).
+func (t *textBuf) title(s string) *textBuf {
+	i := t.n
+	t.str(s)
+	if i < t.n && t.b[i] >= 'a' && t.b[i] <= 'z' {
+		t.b[i] -= 'a' - 'A'
+	}
+	return t
+}
+
 // sint writes v with its sign, + for zero and up.
 func (t *textBuf) sint(v int) *textBuf {
 	if v >= 0 {
