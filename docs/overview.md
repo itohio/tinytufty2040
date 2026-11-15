@@ -35,6 +35,8 @@ From TinyGo's `src/machine/board_tufty2040.go` (0.43.0), Pimoroni's `pimoroni-pi
 
 Confirmed on the device: orientation (MADCTL `0xB0`; the badge cam itself mirrored until its firmware fix), button polarity, the 200 MHz bus timing. Open: whether red is weak on the glass or only through the camera (orange reads yellow-green on camera, the framebuffer is right).
 
+At power-up a pixel-art gopher (`app/gopher.go`: worked out from a few ellipses, no bitmap) blinks and waves over "TinyGo" for 2 s while the firmware is already reading the sensor; any button skips it (the press does nothing else), so does a console command (which still runs).
+
 ## Pages and the features they exercise
 
 | Page | TinyGUI features |

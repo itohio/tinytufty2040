@@ -143,11 +143,12 @@ type App struct {
 	lightForce             int // light <raw>: forced sensor reading, -1: the real sensor
 	health                 health
 	txtStat                textBuf
-	allocU, allocD, allocP int     // allocations in the last frame (ReportAllocs)
-	tiltDir                int     // gravity from the motion sensor (SetTilt)
-	tiltX, tiltY           float32 // the last in-plane gravity (screen x right, y down; m/s²), the tilt command
-	tilted                 bool    // SetTilt has given a direction
-	solid                  int     // grey level of a uniform test screen, -1: off
+	allocU, allocD, allocP int      // allocations in the last frame (ReportAllocs)
+	tiltDir                int      // gravity from the motion sensor (SetTilt)
+	tiltX, tiltY           float32  // the last in-plane gravity (screen x right, y down; m/s²), the tilt command
+	tilted                 bool     // SetTilt has given a direction
+	solid                  int      // grey level of a uniform test screen, -1: off
+	boot                   bootAnim // the gopher at power-up (gopher.go)
 	overlay                *container.Overlay
 	imagePage              int       // index of the Image page (the plasma animates only there)
 	calibPage              int       // index of the Calibration page (-1 without an IMU)
@@ -248,6 +249,7 @@ func New(d ui.Displayer, hw Hardware, cfg Config, now time.Time) *App {
 		speedMS:      1500,
 		cmds:         make(chan command, 16),
 		solid:        -1,
+		boot:         bootAnim{on: true, t0: now},
 		lightForce:   -1,
 	}
 	if _, usb := hw.Battery(); usb {
@@ -333,12 +335,14 @@ func (a *App) Update(now time.Time) {
 	for {
 		select {
 		case c := <-a.cmds:
+			a.bootSkip() // a command skips the gopher, and runs
 			a.exec(c)
 			continue
 		default:
 		}
 		break
 	}
+	a.bootStep(now)
 	a.frameMotion() // the IMU samples drained before this Update, handed to the demos once
 	us := now.UnixMicro()
 	if now.Sub(a.lastSample) >= a.samplePeriod {
@@ -434,6 +438,10 @@ func (a *App) Draw() {
 		return
 	}
 	a.d.FillScreen(colBG)
+	if a.boot.on {
+		a.drawBoot()
+		return
+	}
 	if a.saver {
 		a.saverW.Draw(a.saverPos)
 	} else if a.full != nil {
@@ -503,6 +511,9 @@ func (a *App) Press(b Button, long bool) {
 		a.log(pressLongLog[b])
 	} else {
 		a.log(pressLog[b])
+	}
+	if a.bootSkip() {
+		return // the press skips the gopher and does nothing else
 	}
 	if a.saver {
 		a.saver = false
@@ -592,6 +603,9 @@ func (a *App) Press(b Button, long bool) {
 // navigation keys' edges beside their presses, so a full-screen demo can act
 // while one is held (holder).
 func (a *App) Hold(b Button, down bool) {
+	if a.boot.on {
+		return // the press that follows skips the gopher
+	}
 	if down {
 		a.heldSince[b] = a.now
 	} else {

@@ -38,6 +38,7 @@ func TestOrientationCalibrationDrivesTheLED(t *testing.T) {
 	id := func(d, x time.Duration) time.Duration { return d }
 	now := time.Now()
 	a := New(fb, hw, Config{DurationAdd: id, DurationSub: id, IMU: true}, now)
+	a.boot.on = false // the tests start after the gopher
 	c := &scriptedCal{ph: calWaiting}
 	c.mean = [6]float32{0, gravity, 0} // upright: not the picked screen up
 	a.calib.c = c

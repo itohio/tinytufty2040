@@ -37,3 +37,7 @@ tools/badgectl stats
 ```
 
 Buttons: UP/DOWN focus (or change a value while editing), A select, B back (on a page's top level: the page shown before), C next page (hold: previous), USER held > 1 s screensaver.
+
+## Credits
+
+The boot animation's gopher is drawn after the Go gopher, designed by Renée French and licensed under the Creative Commons Attribution 4.0 license (https://go.dev/blog/gopher).

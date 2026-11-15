@@ -24,6 +24,7 @@ func framedApp() (*App, func()) {
 	id := func(d, x time.Duration) time.Duration { return d }
 	now := time.Now()
 	a := New(fb, testHW{}, Config{DurationAdd: id, DurationSub: id, IMU: true}, now)
+	a.boot.on = false // the tests start after the gopher
 	frame := func() {
 		now = now.Add(33 * time.Millisecond)
 		a.SetIMU([3]float32{-1.5, 9.4, 1.5}, [3]float32{0.01, -0.02, 0.005}, 0.033)
