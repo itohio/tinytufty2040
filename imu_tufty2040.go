@@ -10,6 +10,7 @@ import (
 	"github.com/itohio/EasyRobot/x/devices/mpu6050"
 	"github.com/itohio/tinytufty2040/app"
 	"github.com/itohio/tinytufty2040/console"
+	"github.com/itohio/tinytufty2040/mpufifo"
 )
 
 // The owner's MPU6050 sits on the debug pads JP1 (3V3, SDA pad 9, SCL pad 8,
@@ -24,6 +25,10 @@ var (
 		Accel:              mpu6050.Accel2G,
 		Gyro:               mpu6050.Gyro2000DPS, // ±500 clipped a brisk pick-up (TG-6 capture 0); 0.06 °/s a step, far under the rest thresholds
 		DataReadyInterrupt: true,
+
+		// INT_STATUS bit 4 is set on an overflow only with this on (MATH-1
+		// D1); any read clears it, so the drain's FIFO count check stays
+		FIFOOverflowInterrupt: true,
 	}
 	imuINT = machine.GPIO3
 )
@@ -110,7 +115,7 @@ const (
 	regFIFOCount  = 0x72 // FIFO_COUNT_H, _L
 	regFIFORW     = 0x74 // FIFO_R_W
 	fifoAccGyro   = 0x78 // XG, YG, ZG, ACCEL
-	fifoSample    = 12
+	fifoSample    = mpufifo.Sample
 	fifoBatch     = 10 // samples per burst read
 )
 
@@ -191,7 +196,7 @@ func imuDrainLocked(a *app.App) (bus time.Duration, samples int) {
 	switch err := mpuRead(regIntStatus, st[:]); {
 	case err != nil:
 		imuErrs++ // read the count anyway
-	case st[0]&0x10 != 0:
+	case st[0]&mpu6050.IntStatusFIFOOverflow != 0:
 		imuOvf++
 		_ = fifoStart()
 		return time.Since(t0), 0
@@ -201,7 +206,14 @@ func imuDrainLocked(a *app.App) (bus time.Duration, samples int) {
 		return time.Since(t0), 0
 	}
 	bus = time.Since(t0)
-	n := (int(fifoCnt[0])<<8 | int(fifoCnt[1])) / fifoSample
+	// the count too, not only the status bit: a full FIFO means an
+	// overflow, and reading on would start mid-sample (a fake spin at rest)
+	n, whole := mpufifo.Samples(int(fifoCnt[0])<<8 | int(fifoCnt[1]))
+	if !whole {
+		imuOvf++
+		_ = fifoStart()
+		return bus, 0
+	}
 	cfg := mpu.Config()
 	dt := 1 / cfg.SampleRate()
 	for n > 0 {
