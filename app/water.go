@@ -11,7 +11,8 @@ import (
 
 // Water: EasyRobot's particle liquid (fluid.go; the engine Water shares with
 // Fire's fuel), drawn as an LED matrix on widget.CellGrid: the engine's
-// raster, 64×48 (its box's aspect), shaded in place: the surface is foam,
+// disc raster of where the liquid reaches (RasterDiscs: no wall ring),
+// 64×48 (about its aspect), shaded in place: the surface is foam,
 // deeper water darker.
 const (
 	waterW, waterH = 64, 48
@@ -96,7 +97,7 @@ func (w *water) step() {
 }
 
 func (w *water) render() {
-	w.fl.Raster(w.shade[:], waterW, waterH) // shadeCells turns it into shades in place
+	w.fl.RasterDiscs(w.shade[:], waterW, waterH) // shadeCells turns it into shades in place
 	w.shadeCells()
 }
 

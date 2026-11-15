@@ -33,7 +33,7 @@ func TestRestingPoolHasNoHoles(t *testing.T) {
 		w.step()
 	}
 	raw := make([]uint8, waterW*waterH)
-	w.fl.Raster(raw, waterW, waterH)
+	w.fl.RasterDiscs(raw, waterW, waterH)
 	lit, holes := 0, 0
 	for x := range waterW {
 		top := -1
@@ -64,6 +64,90 @@ func TestRestingPoolHasNoHoles(t *testing.T) {
 	if lit == 0 || holes*20 > lit {
 		t.Fatalf("resting pool: %d lit cells, %d dark cells inside it (want ≤ 5%%)", lit, holes)
 	}
+}
+
+// WATER-2 (owner: bubbles never reach the surface, and gaps between the
+// water and the walls). Tilted and set upright again, at the badge's
+// sensor noise, the settled pool shows hardly any dark cell inside it (lit
+// cells left, right, above and below it), and the cells against the walls
+// are lit wherever the body reaches them: the outermost column on each
+// side, the floor row. Water's raster is doubled from half resolution, so
+// a wall cell is compared with the half-resolution cell next to it (two
+// cells in). Before the fix: about 12 dark cells inside per frame, frozen
+// while the pool was still, and the wall cells always dark.
+func TestSettledWaterHasNoBubblesOrWallGaps(t *testing.T) {
+	r := rand.New(rand.NewPCG(3, 4))
+	w := newWater(newTestShare())
+	const fps = 28 // Water's frame rate on the badge (35 ms)
+	var holes, dark, against, frames int
+	for _, deg := range []float64{90, -90, 180, 45} {
+		for _, d := range []float64{deg, 0} {
+			gx, gy := gravity*math.Sin(d*math.Pi/180), gravity*math.Cos(d*math.Pi/180)
+			for f := range 15 * fps {
+				w.setTilt(float32(gx+r.NormFloat64()*0.02), float32(gy+r.NormFloat64()*0.02))
+				w.tick()
+				if d != 0 || f < 10*fps || f%fps != 0 { // upright, settled: once a second
+					continue
+				}
+				h, k, n := waterGaps(w.shade[:])
+				holes, dark, against, frames = holes+h, dark+k, against+n, frames+1
+			}
+		}
+	}
+	t.Logf("%d settled frames: %d dark cells inside, %d of %d wall cells dark", frames, holes, dark, against)
+	if holes*4 > frames {
+		t.Errorf("settled pool: %d dark cells inside it over %d frames, want ≤ 1 per 4 frames", holes, frames)
+	}
+	if against == 0 || dark*50 > against {
+		t.Errorf("settled pool: %d of %d cells against the walls dark where the body reaches them, want ≤ 2 %%", dark, against)
+	}
+}
+
+// waterGaps counts, in a 64×48 Water raster (0: dark), the dark cells
+// inside the body (lit cells left, right, above and below them), and the
+// wall cells (outermost columns, floor row) next to a lit cell two in:
+// how many of those are dark.
+func waterGaps(c []uint8) (holes, dark, against int) {
+	lit := func(x, y int) bool { return c[y*waterW+x] != 0 }
+	for y := range waterH {
+		for x := range waterW {
+			if lit(x, y) {
+				continue
+			}
+			var l, r, u, d bool
+			for k := 0; k < x && !l; k++ {
+				l = lit(k, y)
+			}
+			for k := x + 1; k < waterW && !r; k++ {
+				r = lit(k, y)
+			}
+			for k := 0; k < y && !u; k++ {
+				u = lit(x, k)
+			}
+			for k := y + 1; k < waterH && !d; k++ {
+				d = lit(x, k)
+			}
+			if l && r && u && d {
+				holes++
+			}
+		}
+	}
+	wall := func(x, y, x2, y2 int) {
+		if lit(x2, y2) {
+			against++
+			if !lit(x, y) {
+				dark++
+			}
+		}
+	}
+	for y := range waterH {
+		wall(0, y, 2, y)
+		wall(waterW-1, y, waterW-3, y)
+	}
+	for x := range waterW {
+		wall(x, waterH-1, x, waterH-3)
+	}
+	return
 }
 
 // Every one of the 8 gravity directions moves the water: settled against

@@ -19,8 +19,11 @@ type fluid interface {
 	// its size (a shake pushes harder).
 	SetGravity(gx, gy float32)
 	// Raster fills dst (w·h) with how much liquid each cell of a w×h raster
-	// over the box holds (0: none).
+	// over the box holds (0: none). Fire's fuel.
 	Raster(dst []uint8, w, h int)
+	// RasterDiscs is Water's raster: dst (w·h) over the part of the box the
+	// liquid reaches, each cell holding how many particles overlap it.
+	RasterDiscs(dst []uint8, w, h int)
 	// Reset lays all the liquid level on the floor (+y).
 	Reset()
 	// Count is the amount of liquid (particles).
@@ -62,17 +65,19 @@ const (
 // flipFluid is EasyRobot's flip liquid as a fluid.
 type flipFluid struct {
 	l      *flip.Liquid
+	r      int32 // the particles' radius (position units, 1/256 cell), as the engine holds it
 	gx, gy int32 // the gravity set (engine units); the engine's own (l.GX, l.GY) turns towards it (liquidTurn)
 	picked [liquidMove]int
-	half   [(waterW / 2) * (waterH / 2)]uint8 // Raster's half-resolution pass
+	half   [(waterW / 2) * (waterH / 2)]uint8 // the rasters' half-resolution pass
 }
 
 func newFlipFluid() *flipFluid {
-	l, err := flip.New(liquidW, liquidH, liquidN, flip.DefaultParams())
+	p := flip.DefaultParams()
+	l, err := flip.New(liquidW, liquidH, liquidN, p)
 	if err != nil {
 		panic("flip: " + err.Error()) // fixed, valid sizes
 	}
-	f := &flipFluid{l: l, gy: liquidG}
+	f := &flipFluid{l: l, r: p.Radius >> 8, gy: liquidG}
 	l.GX, l.GY = f.gx, f.gy
 	return f
 }
@@ -116,6 +121,63 @@ func (f *flipFluid) Raster(dst []uint8, w, h int) {
 	hw, hh := w/2, h/2
 	half := f.half[:hw*hh]
 	f.l.Raster(half, hw, hh)
+	double(dst, half, w, h)
+}
+
+// RasterDiscs is Raster for Water (WATER-2). Raster spans the whole box,
+// the wall ring included, and particle centres stay a radius inside the
+// ring: the raster's outer cells were always dark and the next ones caught
+// only the layer pressed against the wall (9 % of them dark), the owner's
+// gaps between the water and the walls. And a half-resolution cell (0.75
+// engine cell) holding 1.4 centres on average often caught none, a dark
+// cell a still pool kept for good: the bubbles that never rose. Here the
+// span the centres reach, [Cell+r, (W−1)·Cell−r] on each axis, fills the
+// raster, and each particle counts in every cell its disc (radius r)
+// overlaps: those of its corners (x±r, y±r), each once. Same sizes as
+// Raster; one divide per axis per call, none per particle.
+func (f *flipFluid) RasterDiscs(dst []uint8, w, h int) {
+	hw, hh := w/2, h/2
+	half := f.half[:hw*hh]
+	clear(half)
+	l, r := f.l, f.r
+	lo := flip.Cell + r
+	// raster cells per position unit (Q16) over the span, so the far end
+	// stays inside the last cell
+	sx := int32(hw<<16) / (int32(l.W-2)*flip.Cell - 2*r + 1)
+	sy := int32(hh<<16) / (int32(l.H-2)*flip.Cell - 2*r + 1)
+	for i := range l.X {
+		x, y := int32(l.X[i])-lo, int32(l.Y[i])-lo
+		x0, x1 := discCell(x-r, sx, hw), discCell(x+r, sx, hw)
+		y0, y1 := discCell(y-r, sy, hh), discCell(y+r, sy, hh)
+		row0, row1 := y0*hw, y1*hw
+		light(half, row0+x0)
+		if x1 != x0 {
+			light(half, row0+x1)
+		}
+		if y1 != y0 {
+			light(half, row1+x0)
+			if x1 != x0 {
+				light(half, row1+x1)
+			}
+		}
+	}
+	double(dst, half, w, h)
+}
+
+// discCell is the raster cell (0..n−1) of a position v from the span's
+// start, at s raster cells per position unit (Q16).
+func discCell(v, s int32, n int) int { return min(max(int(v*s>>16), 0), n-1) }
+
+// light counts one more particle in raster cell k, saturating at 255.
+func light(half []uint8, k int) {
+	if half[k] < 255 {
+		half[k]++
+	}
+}
+
+// double scales a (w/2)×(h/2) raster up to w×h.
+func double(dst, half []uint8, w, h int) {
+	hw, hh := w/2, h/2
 	for y := range hh {
 		row := half[y*hw : (y+1)*hw]
 		d0 := dst[2*y*w : (2*y+1)*w]
