@@ -88,9 +88,11 @@ func (a *App) SetIMU(acc, gyro [3]float32, dt float32) {
 		return
 	}
 	if a.calib != nil {
-		// the calibrator measures the raw samples; a fit in use corrects
-		// the accelerometer for everything after it
-		a.calib.add(acc, gyro, dt)
+		// the calibrator measures the raw samples, only while its page is
+		// open; a fit in use corrects the accelerometer for everything after
+		if a.cur == a.calibPage {
+			a.calib.add(acc, gyro, dt)
+		}
 		acc = a.calib.correct(acc)
 	}
 	m.step(acc, gyro, dt)

@@ -66,7 +66,7 @@ func storeApp(st CalStore) (*App, []string) {
 	fb := framebuffer.New(ScreenW, 80, make([]uint16, ScreenW*80), nil)
 	id := func(d, x time.Duration) time.Duration { return d }
 	var lines []string
-	a := New(fb, testHW{}, Config{DurationAdd: id, DurationSub: id, IMU: true, CalStore: st,
+	a := New(fb, testHW{}, Config{DurationAdd: id, DurationSub: id, IMU: true, FirstPage: "Calib", CalStore: st,
 		Log: func(s string) { lines = append(lines, strings.Clone(s)) }}, time.Now())
 	a.boot.on = false // the tests start after the gopher
 	return a, lines

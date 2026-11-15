@@ -38,7 +38,8 @@ type Config struct {
 	Log func(line string)
 	// IMU: a motion sensor feeds SetIMU; adds the Motion page (owner: the
 	// Mahony page only when there is an IMU).
-	IMU bool
+	IMU       bool
+	FirstPage string // the page the app opens on after the gopher ("": Boids, the owner's choice)
 	// BuildID names the firmware (git commits, dirty flag, build time):
 	// `version` and `stats` report it (tools/build sets it).
 	BuildID string
@@ -274,8 +275,8 @@ func New(d ui.Displayer, hw Hardware, cfg Config, now time.Time) *App {
 		{"Pong", a.pagePong, a.pong}, {"Boids", a.pageBoids, a.boids},
 	}
 	if cfg.IMU {
-		// the Calibration page first (owner 2026-11-13): the app starts on it;
-		// nothing waits for it
+		// the Calibration page first in the tabs; the app opens on Boids
+		// (owner), and the page measures only while it is open
 		defs = append([]pageDef{{"Calib", a.pageCalib, nil}}, defs...)
 		defs = append(defs, pageDef{"Motion", a.pageMotion, a.motionDemo})
 	}
@@ -318,7 +319,11 @@ func New(d ui.Displayer, hw Hardware, cfg Config, now time.Time) *App {
 		a.initCalibDialog()
 	}
 	a.pages.BuildAll() // every page now: nothing is built (allocated) later
-	a.showPage(0)
+	first := cfg.FirstPage
+	if first == "" {
+		first = "Boids" // after the gopher the app opens on Boids (owner)
+	}
+	a.showPage(max(a.pageIndex(first), 0))
 	a.applyLED()
 	hw.SetBacklight(a.backlight)
 	a.calStore = cfg.CalStore
@@ -389,7 +394,7 @@ func (a *App) Update(now time.Time) {
 	// the Calibration page: its stage and strips; a completed still
 	// measurement sets the gyro's bias in the motion state (owner: "initially
 	// gyro is calibrated"; the motion state's own learning carries on)
-	if a.calib != nil && a.calib.update(now) {
+	if a.calib != nil && a.cur == a.calibPage && a.calib.update(now) { // only while its page is open
 		if a.motion != nil {
 			a.motion.seedBias(a.calib.res.gyroBias)
 			a.calib.gyroSet = true
@@ -718,6 +723,9 @@ func (a *App) afterShow() {
 	p.root.Interact(ui.USER)
 	if p.root.Index() < 0 && p.nav.Depth() == 1 {
 		p.nav.Focus(0) // a page shown after an idle timeout starts focused
+	}
+	if a.calib != nil && a.cur == a.calibPage && a.calib.g.stage == gOff {
+		a.calib.again() // the Calibration page measures from when it is opened, never in the background
 	}
 	if c, ok := a.demoOf[a.cur].(interface{ claim() }); ok {
 		c.claim() // Water or Fire shown: it takes the shared liquid engine

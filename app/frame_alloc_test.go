@@ -23,7 +23,7 @@ func framedApp() (*App, func()) {
 	fb := framebuffer.New(ScreenW, 80, make([]uint16, ScreenW*80), nil)
 	id := func(d, x time.Duration) time.Duration { return d }
 	now := time.Now()
-	a := New(fb, testHW{}, Config{DurationAdd: id, DurationSub: id, IMU: true}, now)
+	a := New(fb, testHW{}, Config{DurationAdd: id, DurationSub: id, IMU: true, FirstPage: "Calib"}, now)
 	a.boot.on = false // the tests start after the gopher
 	frame := func() {
 		now = now.Add(33 * time.Millisecond)

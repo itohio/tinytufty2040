@@ -29,8 +29,8 @@ func TestTheGopherPlaysThenTheFirstPageShows(t *testing.T) {
 			t.Fatalf("at %d ms the gopher is on: %v (want on to 2 s, then the first page)", ms, on)
 		}
 	}
-	if a.cur != 0 {
-		t.Fatalf("after the gopher the page is %d, want the first (0)", a.cur)
+	if name := a.page().name; name != "Boids" {
+		t.Fatalf("after the gopher the page is %q, want Boids", name)
 	}
 }
 
@@ -39,10 +39,11 @@ func TestTheGopherPlaysThenTheFirstPageShows(t *testing.T) {
 func TestAButtonOrACommandSkipsTheGopher(t *testing.T) {
 	a, now := bootApp()
 	a.Update(now)
+	start := a.cur
 	a.Press(BtnC, false) // C: would change the page
 	a.Update(now.Add(100 * time.Millisecond))
-	if a.boot.on || a.cur != 0 {
-		t.Fatalf("after C: gopher on %v, page %d; want skipped, still the first page", a.boot.on, a.cur)
+	if a.boot.on || a.cur != start {
+		t.Fatalf("after C: gopher on %v, page %q; want skipped, still Boids", a.boot.on, a.page().name)
 	}
 	b, now := bootApp()
 	b.Update(now)
@@ -59,5 +60,32 @@ func TestTheGopherDrawsWithoutAllocating(t *testing.T) {
 	a.Update(now.Add(time.Second)) // waving
 	if n := testing.AllocsPerRun(5, a.Draw); n != 0 {
 		t.Fatalf("a gopher frame allocates %.0f times, want 0", n)
+	}
+}
+
+// After the gopher the app opens on Boids, and the Calibration page
+// measures only while it is open: 10 s of a still badge on Boids feed the
+// calibrator nothing (no measurement, no gyro bias set); opened, it is fed.
+func TestTheAppOpensOnBoidsAndCalibratesOnlyWhenAsked(t *testing.T) {
+	fb := framebuffer.New(ScreenW, 80, make([]uint16, ScreenW*80), nil)
+	id := func(d, x time.Duration) time.Duration { return d }
+	now := time.Now()
+	a := New(fb, testHW{}, Config{DurationAdd: id, DurationSub: id, IMU: true}, now)
+	c := &scriptedCal{}
+	a.calib.c = c
+	for i := range 10 * 30 {
+		a.SetIMU([3]float32{0, gravity, 0}, [3]float32{}, 1.0/30)
+		a.Update(now.Add(time.Duration(i) * time.Second / 30))
+	}
+	if name := a.page().name; name != "Boids" {
+		t.Fatalf("after the gopher the app is on %q, want Boids", name)
+	}
+	if c.n != 0 || a.calib.gyroSet {
+		t.Fatalf("on Boids the calibrator got %d samples (gyro bias set: %v), want none", c.n, a.calib.gyroSet)
+	}
+	a.showPage(a.calibPage)
+	a.SetIMU([3]float32{0, gravity, 0}, [3]float32{}, 1.0/30)
+	if c.n == 0 {
+		t.Fatal("the Calibration page opened, yet the calibrator got no sample")
 	}
 }

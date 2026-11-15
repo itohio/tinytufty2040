@@ -76,16 +76,15 @@ func TestCalibrationShowsEveryStage(t *testing.T) {
 	want("a minute later", calShowDone, 100)
 }
 
-// With an IMU the app starts on the Calibration page, yet nothing waits
-// for it (owner: "demo loading never waits"): C goes on to the next page at
-// once, and every sample reaches both the calibrator and the motion state,
-// which runs uncalibrated meanwhile.
+// Opened, the Calibration page holds nothing up: C goes on to the next page
+// at once; while it is open every sample reaches both the calibrator and the
+// motion state, and once it is left only the motion state.
 func TestCalibrationPageDoesNotHoldUpTheDemos(t *testing.T) {
 	a, frame := framedApp()
 	c := &scriptedCal{}
 	a.calib.c = c
 	if a.page().name != "Calib" {
-		t.Fatalf("starts on %q, want the Calibration page", a.page().name)
+		t.Fatalf("on %q, want the Calibration page (opened)", a.page().name)
 	}
 	frame()
 	if c.n == 0 || a.motion.samples == 0 {
@@ -98,8 +97,8 @@ func TestCalibrationPageDoesNotHoldUpTheDemos(t *testing.T) {
 	}
 	n := c.n
 	frame()
-	if c.n == n {
-		t.Fatal("calibration stopped when its page was left")
+	if c.n != n { // the owner: it measures only while its page is open
+		t.Fatal("the calibrator still got samples after its page was left")
 	}
 }
 
@@ -109,8 +108,8 @@ func TestNoIMUNoCalibrationPage(t *testing.T) {
 	if i := a.pageIndex("Calib"); i >= 0 || a.calib != nil {
 		t.Fatalf("no IMU, yet a Calibration page at %d", i)
 	}
-	if a.page().name != "Demos" {
-		t.Fatalf("no IMU: starts on %q, want Demos", a.page().name)
+	if a.page().name != "Demos" { // testApp opens the first tab
+		t.Fatalf("no IMU: the first tab is %q, want Demos", a.page().name)
 	}
 }
 

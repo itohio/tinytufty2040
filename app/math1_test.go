@@ -273,7 +273,7 @@ func TestSettlingIsShown(t *testing.T) {
 	fb := framebuffer.New(ScreenW, ScreenH, make([]uint16, ScreenW*ScreenH), nil)
 	id := func(d, x time.Duration) time.Duration { return d }
 	now := time.Now()
-	a := New(fb, testHW{}, Config{DurationAdd: id, DurationSub: id, IMU: true}, now)
+	a := New(fb, testHW{}, Config{DurationAdd: id, DurationSub: id, IMU: true, FirstPage: "Calib"}, now)
 	a.boot.on = false // the tests start after the gopher
 	a.pong.showFull()
 	warn := framebuffer.To565(colWarn)
