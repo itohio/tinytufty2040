@@ -9,19 +9,29 @@ import "time"
 // The IMU drain splits into its I2C reads (bus) and the motion maths.
 type frameProfile struct {
 	n, samples                           int
-	period, imu, bus, update, draw, push int64 // µs, summed
-	imuErrs, imuOvf                      int   // since boot (kept across windows)
+	period, imu, bus, update, draw, push int64     // µs, summed
+	imuErrs, imuOvf                      int       // since boot (kept across windows)
+	last                                 time.Time // the previous frame's start (kept across windows)
 }
 
 // ReportIMUFaults hands over the drain's I2C errors and FIFO overflow
 // restarts since boot.
 func (a *App) ReportIMUFaults(errs, ovf int) { a.prof.imuErrs, a.prof.imuOvf = errs, ovf }
 
-// ReportProfile adds one frame: its period (start to start), the IMU drain
-// with its time on the I2C bus and the samples it fed, Update (the demos'
-// steps), and the bands' draw and push.
-func (a *App) ReportProfile(period, imu, bus time.Duration, samples int, update, draw, push time.Duration) {
+// ReportProfile adds one frame, started at start: its period (start to
+// start), the IMU drain with its time on the I2C bus and the samples it fed,
+// Update (the demos' steps), and the bands' draw and push. The first frame
+// after boot has no previous start and adds nothing: timed from the zero
+// time it made the first report after every boot garbage (on the badge the
+// 32-bit int cut the huge average).
+func (a *App) ReportProfile(start time.Time, imu, bus time.Duration, samples int, update, draw, push time.Duration) {
 	p := &a.prof
+	prev := p.last
+	p.last = start
+	if prev.IsZero() {
+		return
+	}
+	period := start.Sub(prev)
 	p.n++
 	p.samples += samples
 	p.period += period.Microseconds()
@@ -53,6 +63,5 @@ func (a *App) profileReport() {
 			str(" maths_us ").int(int((p.imu - p.bus) / s)).String())
 	}
 	a.log(a.txtStat.reset().str("prof imu err ").int(p.imuErrs).str(" ovf ").int(p.imuOvf).str(" since boot").String())
-	errs, ovf := p.imuErrs, p.imuOvf
-	*p = frameProfile{imuErrs: errs, imuOvf: ovf}
+	*p = frameProfile{imuErrs: p.imuErrs, imuOvf: p.imuOvf, last: p.last}
 }
