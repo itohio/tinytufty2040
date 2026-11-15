@@ -7,8 +7,8 @@ each demo's Full view), and C wraps back to Demos. The badge's memory is
 read after every round (`mem`: live and free heap after a GC).
 
 A crash shows as a missing reply, a reboot banner or a "fatal error" line
-in badgectl-out/console.log. Run it only inside the camera loop with
-verify (owner): no unattended soaks, no periodic watch.
+in badgectl-out/console.log. Run it only inside a watched camera loop
+(the owner): no unattended soaks, no periodic watch.
 
     tools/soak [rounds] [--every K]   # mem every K rounds (default 1)
 """

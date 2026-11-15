@@ -5,13 +5,14 @@ The ID is <tinytufty2040 commit>[+]/<tinygui commit>[+]@<MMDD-HHMM>: a + marks
 a tree with uncommitted changes. The badge answers `version` with it and
 `stats` starts with it.
 
-    tools/build [out.uf2]      # default ../_scratch/tinygui/tufty.uf2
+    tools/build [out.uf2]      # default build/tufty.uf2 (gitignored)
 """
 import os, subprocess, sys, time
 
 here = os.path.dirname(os.path.abspath(__file__))
 repo = os.path.dirname(here)
-out = sys.argv[1] if len(sys.argv) > 1 else os.path.join(repo, "..", "_scratch", "tinygui", "tufty.uf2")
+out = sys.argv[1] if len(sys.argv) > 1 else os.path.join(repo, "build", "tufty.uf2")
+os.makedirs(os.path.dirname(os.path.abspath(out)), exist_ok=True)
 
 
 def rev(path):

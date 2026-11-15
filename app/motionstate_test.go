@@ -348,8 +348,8 @@ func TestPathKeepsItsHistoryAtRest(t *testing.T) {
 	}
 }
 
-// A still badge keeps the paddle still (verify2 TG-pong-paddle-r2: on the
-// old motion it drifted 26 px in 20 s): with the badge's sensor noise
+// A still badge keeps the paddle still (seen on the badge: on
+// the old motion it drifted 26 px in 20 s): with the badge's sensor noise
 // (accelerometer σ 0.02 m/s², gyro σ 0.003 rad/s, a gyro bias learnt at
 // rest), paused or playing, the paddle stays within 1 px (full screen: 5 px
 // a cell) over 30 s.
@@ -390,8 +390,8 @@ func TestStillBadgeKeepsThePaddleStill(t *testing.T) {
 
 // Right after boot, with the badge's own sensor errors (it reads 9.7 m/s²
 // at rest; MPU6050 offsets 0.1–0.5 m/s² per axis, strapdown r8), a still
-// badge keeps the paddle and the boids' window still too (verify2 @1225:
-// the paddle crept 7 px, then 5 px, per 30 s in the first minutes after
+// badge keeps the paddle and the boids' window still too (seen on the
+// badge: the paddle crept 7 px, then 5 px, per 30 s in the first minutes after
 // boot while the Motion page read 0 cm: the strapdown's position crept by
 // millimetres while it learnt its bias at rest, under the readout's 1 cm).
 func TestStillBadgeRightAfterBootKeepsPaddleAndWindowStill(t *testing.T) {
@@ -436,7 +436,7 @@ func TestStillBadgeRightAfterBootKeepsPaddleAndWindowStill(t *testing.T) {
 }
 
 // With the badge's own sensor noise the strapdown now and then leaves rest
-// for a moment (verify2 @1414: rest 97 %, the paddle moved 17 px, 2.2 mm,
+// for a moment (seen on the badge: rest 97 %, the paddle moved 17 px, 2.2 mm,
 // in 30 s on a still badge). At accelerometer noise 0.04 m/s² and gyro
 // 0.005 rad/s the host shows the same: rest 96 %, 16 false starts in
 // 120 s. The paddle and the window must stay still through all of them.
@@ -479,7 +479,7 @@ func TestNoisyStillBadgeKeepsPaddleAndWindowStill(t *testing.T) {
 	}
 }
 
-// Every real movement registers, quick flicks too (owner; Leader: "in Pong
+// Every real movement registers, quick flicks too (owner: "in Pong
 // a quick flick of 0.2–0.4 s is a real move"): up strokes of 3, 5 and 10 cm
 // lasting 0.2, 0.3 and 0.4 s move the badge-frame displacement the paddle
 // and the boids' window read 1:1 (±15 %).

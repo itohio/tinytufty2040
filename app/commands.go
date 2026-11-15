@@ -113,7 +113,7 @@ func (a *App) exec(c command) {
 		}
 	case "version": // the firmware's build ID (tools/build)
 		a.log2("build ", a.cfg.BuildID)
-	case "motion": // the shared motion state as the demos read it (verify2: measurable at rest)
+	case "motion": // the shared motion state as the demos read it (measurable at rest)
 		a.motionReport()
 	case "sens": // the motion sensitivity: mm of badge motion per px of the paddle and the boids' window
 		switch {

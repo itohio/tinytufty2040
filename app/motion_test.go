@@ -173,7 +173,7 @@ func TestPongPaddleFollowsTheBadge(t *testing.T) {
 	}
 }
 
-// The Motion page's angles are the badge's own (verify2 TG-motion-path:
+// The Motion page's angles are the badge's own (seen on the badge:
 // upright it read roll −179°): upright, screen facing you, is roll 0,
 // pitch 0, yaw 0 (from the last path reset); turned clockwise like a
 // steering wheel is +roll; the top tipped towards you is +pitch.

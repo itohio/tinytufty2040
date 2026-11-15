@@ -25,7 +25,7 @@ const (
 	fireMax      = 36       // hottest flame (palette index)
 	fireFuel     = fireMax + 1
 	// the fuel is the shared engine's liquid (fluid.go: one instance for
-	// Water and Fire, Leader 2026-11-13): its amount is the engine's. Nothing
+	// Water and Fire): its amount is the engine's. Nothing
 	// adds or removes fuel: a splash takes it from the pool's surface.
 	fireSplash = liquidMove // fuel units a splash lifts out of the pool and drops back in
 )

@@ -58,8 +58,8 @@ func TestPongBallStaysOnCourt(t *testing.T) {
 }
 
 // Paused, UP/DOWN still move your paddle where it is drawn, at once, and
-// resuming doesn't make it jump (verify2 TG-pong-paddle: the paddle stayed
-// put while paused and leapt 6 cells on resume).
+// resuming doesn't make it jump (seen on the badge: the paddle
+// stayed put while paused and leapt 6 cells on resume).
 func TestPongPausedPaddleMovesWithButtons(t *testing.T) {
 	p := newPong()
 	p.showFull()

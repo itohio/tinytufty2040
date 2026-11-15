@@ -1,9 +1,8 @@
 package app
 
-// MATH-1: fpv-gate's audit tests (docs/evidence/MATH-1-audit.md), copied
-// unchanged from tmp/fpv-gate/harness/fpvgate_math1_test.go (the rig
-// and the sensor model) and fpvgate_math1_targets_test.go (one target per
-// defect, added with its fix).
+// MATH-1: the motion audit's tests, copied unchanged from its harness (the
+// rig and the sensor model) and its targets (one target per defect, added
+// with its fix).
 
 import (
 	"math"
@@ -47,10 +46,11 @@ func (r *rig) window() (float64, float64) {
 	return float64(b.pose.baseX) / boidsFix, float64(b.pose.baseY) / boidsFix
 }
 
-// sensor model, badge upright facing you (badge +Y = world up, +X = world right, +Z = towards you). Hand model v2
-// (fitted to owner-1 held still, and physically consistent; easyrobot E2 round 1): the gyro tremor is a real
-// rotation θ (θ' = w − λθ, w an AR(1) of sd tremG), which the accelerometer sees; the translational tremor is a
-// damped 8 Hz oscillation (bounded position, no DC) of acceleration sd tremA. White noise accSD, gyroSD.
+// sensor model, badge upright facing you (badge +Y = world up, +X = world right, +Z = towards you). Hand model v2,
+// fitted to the owner's still-hand capture and physically consistent: the gyro tremor is a real rotation θ
+// (θ' = w − λθ, w an AR(1) of sd tremG), which the accelerometer sees; the translational tremor is a damped 8 Hz
+// oscillator's spring-and-damping force, of sd tremA (its band content matches the capture's residual after
+// rotation: below 0.5 Hz 0.004, 0.5–2 Hz 0.006, 2–15 Hz 0.028 m/s²). White noise accSD, gyroSD.
 type sensor struct {
 	rng        *rand.Rand
 	accSD      float64 // white accel noise (m/s²)
@@ -63,9 +63,9 @@ type sensor struct {
 }
 
 const (
-	tremRhoG = 0.92            // owner-1 held still: gyro lag-1 0.86–0.94
-	tremLam  = 1.0             // 1/s: a hand's tilt is bounded (mean-reverting); fitted to owner-1 accel x/z sd
-	oscW0    = 2 * math.Pi * 8 // physiological tremor 8–12 Hz; fitted to owner-1 vertical lag-1
+	tremRhoG = 0.92            // the owner's still hand: gyro lag-1 0.86–0.94
+	tremLam  = 1.0             // 1/s: a hand's tilt is bounded (mean-reverting); fitted to the owner's accel x/z sd
+	oscW0    = 2 * math.Pi * 8 // physiological tremor 8–12 Hz; fitted to the owner's vertical lag-1
 	oscZeta  = 0.3
 )
 
@@ -121,9 +121,9 @@ const desk, hand = 0, 1
 
 func noiseOf(kind int) (accSD, gyroSD, tremA, tremG float64) {
 	if kind == desk {
-		return 0.016, 0.0006, 0, 0 // owner-1 170–180 s and M1: accel 0.014–0.018, gyro 0.0006
+		return 0.016, 0.0006, 0, 0 // the badge on a desk: accel 0.014–0.018, gyro 0.0006
 	}
-	return 0.016, 0.0006, 0.031, 0.016 // owner-1 10–30 s held still: gyro sd 0.013–0.021 (real rotation), residual accel 0.026–0.043
+	return 0.016, 0.0006, 0.031, 0.016 // the owner's still hand: gyro sd 0.013–0.021 (real rotation), residual accel 0.026–0.043
 }
 
 // shaky: the owner's 1–10 s hold (gyro sd 0.025–0.028, residual accel 0.048–0.122)
@@ -315,7 +315,8 @@ func TestMath1GentleStrokesFromRestRegister(t *testing.T) {
 
 // A3 (app): in the owner's still hand, a vertical stroke that stands above the tremor still registers with the
 // right sign and at least a quarter of its size: 3 cm in 0.5–1 s, 5 cm in 0.5–1 s, 10 cm in 0.5–2 s (above the
-// steady tremor by tinygui's D2 measurement, a3-quiet.md r2; 3 cm/2 s and 5 cm/2 s are under it and excluded).
+// steady tremor: D2, the world acceleration's 0.25 s average less its 2 s average, ≤ 0.044 m/s² in the steady
+// hand; 3 cm/2 s and 5 cm/2 s are under it and excluded).
 // a29fb52: 0.32–1.0×. Horizontal in the hand is E2/A5's (StrokeInTheHandMovesTenPixels).
 func TestMath1StrokesInTheHandRegister(t *testing.T) {
 	for _, c := range []struct{ d, T float64 }{{0.03, 0.5}, {0.03, 1}, {0.05, 0.5}, {0.05, 1}, {0.10, 0.5}, {0.10, 1}, {0.10, 2}} {
@@ -328,7 +329,7 @@ func TestMath1StrokesInTheHandRegister(t *testing.T) {
 	}
 }
 
-// A1 (Leader): until the motion state has started, the screen says so: a
+// A1: until the motion state has started, the screen says so: a
 // frozen paddle is never silent. The footer, and the full-screen views
 // (here Pong's PLAY, which has no footer), until it settles.
 func TestSettlingIsShown(t *testing.T) {

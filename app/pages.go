@@ -247,14 +247,14 @@ func (a *App) pageLayouts() *page {
 			panel("HFlow(4)", box(half, 70, layout.HFlow(4, 0), hf...)),
 		)),
 		// three panels: a fourth (HList + Separator, 12 widgets) cost heap
-		// the badge needs free (Leader 2026-11-13)
+		// the badge needs free
 		still(box(innerW, 88, layout.HList(8),
 			panel("VFlow(3)", box(half, 70, layout.VFlow(3, 0), vf...)),
 		)),
 	)
 }
 
-// listRows is the List page's length: 8 (Leader 2026-11-13: the heap needs
+// listRows is the List page's length: 8 (the heap needs
 // 30 KB free after setup). 10 rows fit the 186 px view, so the list no
 // longer scrolls; each row's widgets and text cost heap (20 ran out at boot).
 const listRows = 8

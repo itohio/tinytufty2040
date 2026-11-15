@@ -116,7 +116,7 @@ def load_uf2(name):
 
 def main():
     # arguments and the file are checked before any USB access: --help or a
-    # mistyped path never touches the bootloader (verify TG-1-postcommit R10)
+    # mistyped path never touches the bootloader
     if len(sys.argv) != 2:
         sys.exit(__doc__)
     if sys.argv[1] in ("-h", "--help"):

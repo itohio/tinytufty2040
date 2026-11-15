@@ -704,7 +704,7 @@ func (a *App) setAccent(i int) {
 // logCapacity is how many lines the Log page keeps; logRing has one spare
 // slot so a line is never overwritten while the log still shows it.
 const (
-	logCapacity = 16 // lines kept (56 B each): the heap needs 30 KB free after setup (Leader 2026-11-13)
+	logCapacity = 16 // lines kept (56 B each): the heap needs 30 KB free after setup
 	logLineLen  = 56
 )
 

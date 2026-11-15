@@ -20,8 +20,9 @@ import argparse, os, subprocess, sys, time
 import serial
 from serial.tools import list_ports
 
-# The badge-cam tool (esp32cam's); override with BADGECAM_GRAB.
-GRAB = os.environ.get("BADGECAM_GRAB", os.path.expanduser("~/src/_scratch/badgecam/grab"))
+# The badge-cam tool: set BADGECAM_GRAB to its path for photos (--grab,
+# --tour); without it there are none, and the first request says so.
+GRAB = os.environ.get("BADGECAM_GRAB", "")
 FRAME = 1 / 30  # the badge's frame period (33 ms)
 CAM_BOX = (485, 327, 1520, 1153)  # badge screen in the 2048×1536 cam frame (--cam-box)
 CAM_FLIP = False  # the cam firmware un-mirrors since 16:29 (hm=1); --cam-flip for older frames
@@ -117,10 +118,15 @@ def relay_snapshot(out_dir):
 
 
 def grab(out_dir, tries=3):
-    """Badge-cam photo: esp32cam's grab tool (applies the owner's
-    _scratch/badgecam/settings.json); when his camera page holds the port
+    """Badge-cam photo: the badge-cam grab tool (BADGECAM_GRAB, which applies
+    the camera's saved settings); when the owner's camera page holds the port
     ('port busy'), the frame his page relays. Returns the JPEG path or None."""
+    global NO_CAM
     if NO_CAM:
+        return None
+    if not GRAB:
+        print("grab: no photos: set BADGECAM_GRAB to the badge-cam grab tool", file=sys.stderr)
+        NO_CAM = True  # said once
         return None
     for _ in range(tries):
         r = subprocess.run([GRAB, "--out", out_dir], capture_output=True, text=True)

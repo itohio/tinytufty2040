@@ -506,8 +506,8 @@ func (m *motion) followNav() {
 	}
 }
 
-// badgeEuler is the badge's attitude as the owner reads it (verify2
-// TG-motion-path: upright, the filter's Euler angles read roll −179°): 0, 0,
+// badgeEuler is the badge's attitude as the owner reads it (seen on
+// the badge: upright, the filter's Euler angles read roll −179°): 0, 0,
 // 0 when the badge stands upright with its screen facing you. The body axes
 // are forward = into the screen (badge −Z, the way you look), right = the
 // badge's right (+X), down = down the screen (−Y); the angles are the usual

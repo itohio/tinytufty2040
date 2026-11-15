@@ -158,7 +158,7 @@ func TestWaterPourMovesNotAdds(t *testing.T) {
 	}
 }
 
-// One engine for Water and Fire's fuel (Leader 2026-11-13): showing Fire
+// One engine for Water and Fire's fuel (2026-11-13): showing Fire
 // takes it and lays the fuel afresh; Water then doesn't step (its tile keeps
 // its last frame) until it takes the engine back.
 func TestLiquidEngineIsShared(t *testing.T) {

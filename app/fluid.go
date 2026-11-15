@@ -34,10 +34,10 @@ type fluid interface {
 	Move(n int, fx, fy float32) int
 }
 
-// The shared engine's box and particle count (Leader 2026-11-13): the
+// The shared engine's box and particle count (2026-11-13): the
 // largest r4 size that leaves ≥ 20 KB free once the automatons are gone
-// (24×18 cells, the wall ring included, 400 particles: 12.3 KB on TinyGo,
-// fpv-gate). Rastered to the 64×48 LED grids.
+// (24×18 cells, the wall ring included, 400 particles: 12.3 KB on TinyGo).
+// Rastered to the 64×48 LED grids.
 const (
 	liquidW, liquidH = 24, 18
 	liquidN          = 400
@@ -46,7 +46,7 @@ const (
 	liquidG    = 1311
 	liquidGMax = 2 * liquidG
 	// liquidHold: a gravity change smaller than this (1/128 of |g|, 0.45°)
-	// is sensor noise and is not passed on (easyrobot: noise above it rocks
+	// is sensor noise and is not passed on (noise above it rocks
 	// a still pool's surface)
 	liquidHold = liquidG / 128
 	liquidMove = 16 // most units Move lifts at once
@@ -55,7 +55,7 @@ const (
 	// (the badge turned over, 180°), r3 left the pool glued to the old floor
 	// for good: its solved velocities settled under the rest bar (RestQ8),
 	// below which nothing moves. Turns of up to 90° flow; a reversal so
-	// arrives as a half-second sweep (reported to easyrobot)
+	// arrives as a half-second sweep
 	liquidTurn = math.Pi / 6
 )
 
@@ -172,8 +172,8 @@ func (f *flipFluid) wasPicked(i, k int) bool {
 	return false
 }
 
-// liquidShare is the one engine shared by Water and Fire's fuel (Leader
-// 2026-11-13): one liquid demo is active at a time; showing the other
+// liquidShare is the one engine shared by Water and Fire's fuel
+// (2026-11-13): one liquid demo is active at a time; showing the other
 // claims the engine and lays its liquid afresh. The inactive one doesn't
 // step: its tile keeps its last frame. Each claims the amount it needs
 // (owner 2026-11-13): Water a basin, Fire a thin layer of fuel, Water's

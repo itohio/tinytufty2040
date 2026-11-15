@@ -34,3 +34,6 @@ go.work.sum
 badgectl-out/
 *.uf2
 __pycache__/
+
+# tools/build's default output
+/build/

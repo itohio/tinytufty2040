@@ -20,7 +20,7 @@ func centroid(w, n int, scale float64, pick func(i int) bool) (float64, float64,
 
 // Fire burns on the Demos page while Water holds the shared engine: the
 // app builds Fire, then Water takes the engine, and the camera showed the
-// Fire tile empty black (Leader, 2026-11-13). Its fuel only stops sloshing;
+// Fire tile empty black (2026-11-13). Its fuel only stops sloshing;
 // the flames keep rising from it.
 func TestFireBurnsWhileWaterHasTheEngine(t *testing.T) {
 	share := newTestShare()
@@ -190,7 +190,7 @@ func TestFireRisesStraight(t *testing.T) {
 }
 
 // A gravity picked on the page holds against the IMU while the page is
-// shown (verify2 fire-thin @1225: on a badge with an IMU, the shared motion
+// shown (seen on the badge: with an IMU, the shared motion
 // state put its own "down" back at every sample, so dn-left never took);
 // showing the page again follows the badge.
 func TestPickedGravityHoldsAgainstTheIMU(t *testing.T) {

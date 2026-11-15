@@ -272,7 +272,7 @@ func (p *pong) moveBy(d int32) {
 
 // movePaused puts your paddle at its target at once while the game is
 // paused: no physics step runs to glide it there, and it would jump on
-// resume (verify2 TG-pong-paddle).
+// resume (seen on the badge).
 func (p *pong) movePaused() {
 	if p.paused {
 		p.pad[0] = p.target

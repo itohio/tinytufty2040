@@ -23,8 +23,7 @@ import (
 // Beside the ring, one strip per axis (accelerometer x/y/z, gyro x/y/z)
 // shows its spread (the band's thickness) and drift (the bright line, the
 // mean) over time against the stillness threshold (the shaded zone): the
-// owner sees which axis keeps the calibration from starting (ux
-// UX-TG3-calibration.md).
+// owner sees which axis keeps the calibration from starting.
 
 // calPhase is what the calibrator is doing.
 type calPhase uint8
@@ -80,7 +79,7 @@ const (
 	calDriftK = 1.0 / 150
 )
 
-// The page's geometry inside the page (304×186; ux laid it out for the
+// The page's geometry inside the page (304×186; it was laid out for the
 // whole screen, the page sits under the tabs and above the footer).
 const (
 	calRingD    = 104 // the ring's diameter
@@ -103,7 +102,7 @@ func calStripY(i int) int16 {
 	return 114 + int16(i-3)*calStripGap
 }
 
-// ux's palette for the page.
+// The page's palette.
 var (
 	calTrack  = color.RGBA{0x30, 0x36, 0x3D, 255}
 	calFill   = color.RGBA{0x38, 0xBD, 0xF8, 255}
@@ -168,7 +167,7 @@ func newCalibration(c calibrator) *calibration {
 		if i >= 3 {
 			thr = gyroT
 		}
-		// full scale 3× the threshold: the zone fills the middle third (ux)
+		// full scale 3× the threshold: the zone fills the middle third
 		k.bands[i] = widget.NewStatBand(calTraceW, calTraceH, 3*thr, widget.StatBandStyle{
 			BG: colBG, Zone: calZone, Threshold: calThr, Drift: calDrift,
 			States: [3]color.RGBA{calOK, calWarnC, calBadC},
@@ -320,7 +319,7 @@ func (v *calibView) Draw(ctx ui.Context) {
 	fillRect(d, x0+calPanelX-6, y0+20, 1, int16(v.Height)-20, calTrack)
 	v.legend(d, x0+calPanelX, y0+27)
 	// the strips plot the deviation from each axis's slow average against
-	// the stillness threshold (the zone is ±thr): no absolute unit (ux F3)
+	// the stillness threshold (the zone is ±thr): no absolute unit
 	ui.DrawText(d, fontSmall, x0+calChipX-16, y0+27, "acc +-thr", calChrome)
 	ui.DrawText(d, fontSmall, x0+calChipX-20, y0+calStripY(3)-4, "gyro +-thr", calChrome)
 	fillRect(d, x0+calTraceX, y0+calStripY(3)-7, calTraceW-20, 1, calTrack)
@@ -349,7 +348,7 @@ func (v *calibView) legend(d drivers.Displayer, x, y int16) {
 }
 
 // The done state's forecast (owner: "calibration should be able to measure
-// it for me (spread and drift) so I know what to expect"; ux F1): what the
+// it for me (spread and drift) so I know what to expect"): what the
 // Calibrator expects from motion, as two bars on fixed scales, each a solid
 // drift segment and a lighter noise cap over the green zone up to its OK
 // line, with the value beside it, and one line.

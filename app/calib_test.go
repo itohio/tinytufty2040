@@ -104,7 +104,7 @@ func TestNoIMUNoCalibrationPage(t *testing.T) {
 }
 
 // A completed calibration is shown, not applied: the shared motion state
-// keeps its own gyro bias (Leader: nothing goes into it until strapdown r11,
+// keeps its own gyro bias (nothing goes into it until strapdown r11,
 // which seeding needs). A on the page starts a new calibration at once, with
 // no edit mode: every A recalibrates, and the footer stays on paging.
 func TestCalibrationIsShownNotAppliedAndARecalibrates(t *testing.T) {

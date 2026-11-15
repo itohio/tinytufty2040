@@ -5,8 +5,8 @@ import (
 	"tinygo.org/x/drivers"
 )
 
-// settlingText is shown while the motion state hasn't started (MATH-1 A1,
-// Leader): until it has, the paddle and the boids' window don't move, and a
+// settlingText is shown while the motion state hasn't started (MATH-1
+// A1): until it has, the paddle and the boids' window don't move, and a
 // frozen paddle must not be silent. In the footer and on the full-screen
 // motion views; ASCII only (the font).
 const settlingText = "settling - hold still"
