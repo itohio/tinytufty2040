@@ -31,11 +31,9 @@ func (p *pixelLog) Display() error { return nil }
 // (line(100, 100 → −30000, 20000) set half a billion pixels in 2 s).
 func TestPathLinesFinishAndStayInTheView(t *testing.T) {
 	r := viewRect{10, 20, 200, 150}
-	inf := float32(math.Inf(1))
-	nan := float32(math.NaN())
 	cases := []struct {
 		name           string
-		x0, y0, x1, y1 float32
+		x0, y0, x1, y1 int32
 		want           int // pixels, -1: up to the view's diagonal
 	}{
 		{"inside, horizontal", 20, 30, 59, 30, 40},
@@ -43,8 +41,7 @@ func TestPathLinesFinishAndStayInTheView(t *testing.T) {
 		{"both ends far off, across", -40000, 95, 40000, 95, 200},
 		{"both ends far off, missing", -40000, -5000, 40000, -6000, 0},
 		{"from inside to beyond int16", 100, 100, 1e7, 1e7, -1},
-		{"infinite", 100, 100, inf, 50, 0},
-		{"not a number", nan, 50, 100, 50, 0},
+		{"far beyond, steep", 50, 50, 3, 2e9, -1},
 	}
 	for _, c := range cases {
 		p := &pixelLog{r: r}

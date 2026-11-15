@@ -28,7 +28,7 @@ const (
 	pathBackMin = 0.15 // m: the camera's least set-back behind the latest position
 	pathBackMax = 3    // m
 	pathBackK   = 1.6  // set-back per metre of the path's reach from the latest position
-	pathNear    = 0.01 // m: nearer than this to the camera is not drawn
+	pathNearMM  = 10   // mm: nearer than this to the camera is not drawn
 	pathFocal   = 0.8  // focal length, of the view's smaller side
 	insetSize   = 52   // px: the axes inset's square
 	insetScale  = 0.36 // inset axis length, of insetSize
@@ -66,17 +66,13 @@ func (p *pathTrack) record() {
 	p.n = min(p.n+1, pathPoints)
 }
 
-// toMM and fromMM convert a position in metres to the stored millimetres
-// and back (rounded; clamped to ±32.767 m).
+// toMM converts a position in metres to the stored millimetres (rounded;
+// clamped to ±32.767 m).
 func toMM(p [3]float32) (mm [3]int16) {
 	for i, v := range p {
 		mm[i] = int16(math.Round(float64(min(max(v*1000, -32767), 32767))))
 	}
 	return mm
-}
-
-func fromMM(mm [3]int16) [3]float32 {
-	return [3]float32{float32(mm[0]) / 1000, float32(mm[1]) / 1000, float32(mm[2]) / 1000}
 }
 
 // reset starts a new path here.
@@ -96,8 +92,12 @@ type pathView struct {
 	q      vec.Quaternion
 	cam    [3]float32
 	ox, oy int16
-	f      float32
+	f      int32 // px
 	clip   viewRect
+	// the camera for the integer projection (the RP2040 has no FPU): its
+	// axes in the world (Q14) and its position (mm)
+	ax, ay, az [3]int32
+	camMM      [3]int32
 }
 
 // viewRect is a rectangle on the screen: x, y, width, height.
@@ -111,33 +111,50 @@ func (v *pathView) setCamera(back float32) {
 	look := toWorld(v.q, [3]float32{0, 0, -1})
 	p := m.pos
 	v.cam = [3]float32{p[0] - back*look[0], p[1] - back*look[1], p[2] - back*look[2]}
+	v.ax = toQ14(toWorld(v.q, [3]float32{1, 0, 0}))
+	v.ay = toQ14(toWorld(v.q, [3]float32{0, 1, 0}))
+	v.az = toQ14(look)
+	for i, c := range v.cam {
+		v.camMM[i] = int32(min(max(c*1000, -1<<20), 1<<20))
+	}
 }
 
-// project maps a world point to the screen through this frame's camera;
-// ok is false for a point behind it (or too near). The coordinates aren't
-// limited to the view (a point near the camera's plane lands far off it):
-// line clips them.
-func (v *pathView) project(w [3]float32) (x, y float32, ok bool) {
-	b := toBadge(v.q, [3]float32{w[0] - v.cam[0], w[1] - v.cam[1], w[2] - v.cam[2]})
-	depth := -b[2] // the camera looks along the badge's −Z
-	if depth < pathNear {
+// project maps a recorded point (mm) to the screen through this frame's
+// camera, in integers; ok is false for a point behind it (or too near). The
+// coordinates aren't limited to the view (a point near the camera's plane
+// lands far off it): line clips them.
+func (v *pathView) project(mm [3]int16) (x, y int32, ok bool) {
+	var d [3]int32 // from the camera, mm (±32 m: the products fit int32)
+	for i := range 3 {
+		d[i] = min(max(int32(mm[i])-v.camMM[i], -32767), 32767)
+	}
+	depth := dotQ(d, v.az) // the camera looks along the badge's −Z
+	if depth < pathNearMM {
 		return 0, 0, false
 	}
-	return float32(v.ox) + v.f*b[0]/depth, float32(v.oy) - v.f*b[1]/depth, true
+	return int32(v.ox) + v.f*dotQ(d, v.ax)/depth, int32(v.oy) - v.f*dotQ(d, v.ay)/depth, true
 }
 
 // back is the camera's set-back for the path now: far enough that the whole
 // path, as far as it reaches from the latest position, fits the view.
 func (v *pathView) back() float32 {
 	t := v.t
-	p := t.m.pos
-	var reach float32
+	p := toMM(t.m.pos)
+	var reach int64 // mm²
 	for k := range t.n {
-		q := fromMM(t.pts[k])
-		dx, dy, dz := q[0]-p[0], q[1]-p[1], q[2]-p[2]
-		reach = max(reach, dx*dx+dy*dy+dz*dz)
+		reach = max(reach, dist2MM(t.pts[k], p))
 	}
-	return min(max(pathBackK*float32(math.Sqrt(float64(reach))), pathBackMin), pathBackMax)
+	return min(max(pathBackK*float32(math.Sqrt(float64(reach)))/1000, pathBackMin), pathBackMax)
+}
+
+// dist2MM is the squared distance between two recorded points (mm²).
+func dist2MM(a, b [3]int16) int64 {
+	var s int64
+	for i := range 3 {
+		d := int64(a[i]) - int64(b[i])
+		s += d * d
+	}
+	return s
 }
 
 func (v *pathView) Draw(ctx ui.Context) {
@@ -152,18 +169,17 @@ func (v *pathView) Draw(ctx ui.Context) {
 	back := v.back()
 	v.setCamera(back)
 	v.ox, v.oy = x0+w/2, y0+h/2
-	v.f = pathFocal * float32(min(w, h))
+	v.f = int32(pathFocal * float32(min(w, h)))
 	v.clip = viewRect{x0, y0, w, h}
 	// scale: 10 cm at the latest position's distance, bottom left
-	bar := int16(v.f * 0.10 / back)
+	bar := int16(float32(v.f) * 0.10 / back)
 	fillRect(d, x0+6, y0+h-6, min(bar, w-12), 1, pathScale)
 	ui.DrawText(d, fontBody, x0+8, y0+h-9, "10 cm", pathScale) // tinyfont.WriteLine allocates
 	// the path, oldest dimmest, ending at the badge (the view's centre)
-	var lx, ly float32
+	var lx, ly int32
 	lok := false
 	for k := range t.n {
-		p := fromMM(t.pts[(t.i-t.n+k+pathPoints)%pathPoints])
-		x, y, ok := v.project(p)
+		x, y, ok := v.project(t.pts[(t.i-t.n+k+pathPoints)%pathPoints])
 		if ok && lok {
 			f := uint8(60 + k*195/t.n)
 			line(d, v.clip, lx, ly, x, y, color.RGBA{f / 3, f, f, 255})
@@ -171,7 +187,7 @@ func (v *pathView) Draw(ctx ui.Context) {
 		lx, ly, lok = x, y, ok
 	}
 	if lok {
-		line(d, v.clip, lx, ly, float32(v.ox), float32(v.oy), colFG)
+		line(d, v.clip, lx, ly, int32(v.ox), int32(v.oy), colFG)
 	}
 	fillRect(d, v.ox-2, v.oy-2, 5, 5, colFG) // the badge, now
 	v.drawInset(d, x0+w-insetSize-2, y0+2)
@@ -181,35 +197,74 @@ func (v *pathView) Draw(ctx ui.Context) {
 // sees them, small and faint, in an insetSize square at (x, y).
 func (v *pathView) drawInset(d drivers.Displayer, x, y int16) {
 	const s = insetSize * insetScale
-	cx, cy := float32(x+insetSize/2), float32(y+insetSize/2)
+	cx, cy := int32(x+insetSize/2), int32(y+insetSize/2)
 	for i := range 3 {
 		var ax [3]float32
 		ax[i] = 1
 		b := toBadge(v.q, ax)
-		line(d, v.clip, cx, cy, cx+b[0]*s, cy-b[1]*s, axisColors[i])
+		line(d, v.clip, cx, cy, cx+int32(b[0]*s), cy-int32(b[1]*s), axisColors[i])
 	}
 }
 
+// outcode is where (x, y) lies against a rectangle: 1 left, 2 right, 4
+// above, 8 below; 0 inside.
+func outcode(x, y, xmin, ymin, xmax, ymax int32) (k uint8) {
+	if x < xmin {
+		k |= 1
+	} else if x > xmax {
+		k |= 2
+	}
+	if y < ymin {
+		k |= 4
+	} else if y > ymax {
+		k |= 8
+	}
+	return k
+}
+
 // line draws the part of the segment (x0, y0)–(x1, y1) inside r, one pixel
-// wide. It is clipped first (Liang–Barsky) and drawn in int32 (Bresenham):
-// a runaway position projects the path's points tens of thousands of pixels
-// off the view, and int16 Bresenham over such a segment overflowed (2·err)
-// and never ended: the Motion page froze (TG-6).
-func line(d drivers.Displayer, r viewRect, x0, y0, x1, y1 float32, c color.RGBA) {
-	if !finite(x0) || !finite(y0) || !finite(x1) || !finite(y1) {
+// wide, all in integers. It is clipped first (Cohen–Sutherland; the
+// crossing in int64) and then drawn (Bresenham): a runaway position projects
+// the path's points tens of thousands of pixels off the view, and an int16
+// Bresenham over such a segment overflowed (2·err) and never ended: the
+// Motion page froze (TG-6).
+func line(d drivers.Displayer, r viewRect, x0, y0, x1, y1 int32, c color.RGBA) {
+	xmin, ymin := int32(r.x), int32(r.y)
+	xmax, ymax := xmin+int32(r.w)-1, ymin+int32(r.h)-1
+	k0, k1 := outcode(x0, y0, xmin, ymin, xmax, ymax), outcode(x1, y1, xmin, ymin, xmax, ymax)
+	for range 8 { // each pass puts one end on an edge: 4 per end at most
+		if k0|k1 == 0 {
+			break
+		}
+		if k0&k1 != 0 {
+			return // wholly outside
+		}
+		k := k0
+		if k == 0 {
+			k = k1
+		}
+		dx, dy := int64(x1-x0), int64(y1-y0)
+		var x, y int32
+		switch {
+		case k&4 != 0:
+			x, y = x0+int32(dx*int64(ymin-y0)/dy), ymin
+		case k&8 != 0:
+			x, y = x0+int32(dx*int64(ymax-y0)/dy), ymax
+		case k&1 != 0:
+			x, y = xmin, y0+int32(dy*int64(xmin-x0)/dx)
+		default:
+			x, y = xmax, y0+int32(dy*int64(xmax-x0)/dx)
+		}
+		if k == k0 {
+			x0, y0, k0 = x, y, outcode(x, y, xmin, ymin, xmax, ymax)
+		} else {
+			x1, y1, k1 = x, y, outcode(x, y, xmin, ymin, xmax, ymax)
+		}
+	}
+	if k0|k1 != 0 {
 		return
 	}
-	dx, dy := x1-x0, y1-y0
-	t0, t1 := float32(0), float32(1)
-	xmin, ymin := float32(r.x), float32(r.y)
-	xmax, ymax := xmin+float32(r.w)-1, ymin+float32(r.h)-1
-	if !clipT(-dx, x0-xmin, &t0, &t1) || !clipT(dx, xmax-x0, &t0, &t1) ||
-		!clipT(-dy, y0-ymin, &t0, &t1) || !clipT(dy, ymax-y0, &t0, &t1) {
-		return // wholly outside
-	}
-	ax, ay := int32(math.Round(float64(x0+t0*dx))), int32(math.Round(float64(y0+t0*dy)))
-	bx, by := int32(math.Round(float64(x0+t1*dx))), int32(math.Round(float64(y0+t1*dy)))
-	ex, ey := bx-ax, by-ay
+	ex, ey := x1-x0, y1-y0
 	sx, sy := int32(1), int32(1)
 	if ex < 0 {
 		ex, sx = -ex, -1
@@ -219,45 +274,21 @@ func line(d drivers.Displayer, r viewRect, x0, y0, x1, y1 float32, c color.RGBA)
 	}
 	err := ex - ey
 	for {
-		d.SetPixel(int16(ax), int16(ay), c)
-		if ax == bx && ay == by {
+		d.SetPixel(int16(x0), int16(y0), c)
+		if x0 == x1 && y0 == y1 {
 			return
 		}
 		e2 := 2 * err
 		if e2 > -ey {
 			err -= ey
-			ax += sx
+			x0 += sx
 		}
 		if e2 < ex {
 			err += ex
-			ay += sy
+			y0 += sy
 		}
 	}
 }
-
-// clipT narrows [t0, t1] to the part of a segment on the inner side of one
-// edge (Liang–Barsky: p the segment's direction across the edge, q how far
-// inside it starts); false when nothing is left.
-func clipT(p, q float32, t0, t1 *float32) bool {
-	if p == 0 {
-		return q >= 0 // parallel to the edge: inside or not at all
-	}
-	rt := q / p
-	if p < 0 {
-		if rt > *t1 {
-			return false
-		}
-		*t0 = max(*t0, rt)
-	} else {
-		if rt < *t0 {
-			return false
-		}
-		*t1 = min(*t1, rt)
-	}
-	return true
-}
-
-func finite(v float32) bool { return v == v && v-v == 0 }
 
 // motionDemo is the Motion page's demo: it records the path each frame and
 // shows it full screen.
