@@ -1,21 +1,25 @@
 package app
 
-// The motion sensitivity (owner 2026-11-14, TG-6 #6: he picked the badge up
-// and the flock vanished): how far the badge moves for one full-screen pixel
-// of the boids' window. In RAM; the Motion page's path keeps its own zoom.
-// At 1:1 on the glass (a pixel is 0.1275 mm) any real move swept the window
-// past the flock. (Pong's paddle follows pitch since PONG-PITCH-1.)
-
+// The motion sensitivity: how far the badge moves for one full-screen
+// pixel of the boids' window. In RAM; the Motion page's path keeps its own
+// zoom. 1:1 moves the window with the badge on the glass (a pixel is
+// 0.1275 mm, so 1 cm is 78 px): any drift of the shown position at rest
+// sweeps it too, so the default stays coarser. (Pong's paddle follows pitch
+// since PONG-PITCH-1.)
 // sensMM are the choices in mm of badge motion per pixel; sensLabels their
-// words on the Motion page, sensArgs the console's (`sens <mm-per-px>`).
+// words on the Motion page, sensArgs the console's (`sens <choice>`).
 var (
-	sensMM     = [...]float32{2.5, 5, 10, 20, 40}
-	sensLabels = []string{"2.5 mm", "5 mm", "10 mm", "20 mm", "40 mm"}
-	sensArgs   = [len(sensMM)]string{"2.5", "5", "10", "20", "40"}
+	sensMM     = [...]float32{glassMM, 2.5, 5, 10, 20, 40}
+	sensLabels = []string{"1:1", "2.5 mm", "5 mm", "10 mm", "20 mm", "40 mm"}
+	sensArgs   = [len(sensMM)]string{"1:1", "2.5", "5", "10", "20", "40"}
 )
 
-// sensDefault: 1 px = 10 mm, a 10 cm move is 10 px (owner).
-const sensDefault = 2
+// glassMM is 1:1 on the glass: the panel's mm per px (320 px across
+// 40.8 mm).
+const glassMM = 40.8 / 320
+
+// sensDefault: 1 px = 10 mm, a 10 cm move is 10 px.
+const sensDefault = 3
 
 // fullCellPx is a cell's size full screen, in px: the boids' box (and
 // Pong's court) are 64 cells (boidsW, pongW) across the 320 px screen.
@@ -50,4 +54,13 @@ func sensArg(arg string) int {
 		}
 	}
 	return -1
+}
+
+// logSens logs the sensitivity after prefix: 1:1, or the mm per pixel.
+func (a *App) logSens(prefix string) {
+	if a.sens == 0 {
+		a.log2(prefix, "1:1 (the window moves with the badge)")
+		return
+	}
+	a.log3(prefix, "1 px = ", sensLabels[a.sens])
 }

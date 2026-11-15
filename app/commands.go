@@ -24,7 +24,7 @@ var helpLines = [...]string{
 	"led <0-100>, bl <10-100>, saver [0|1], solid [0-255]",
 	"stats, tiles, frames, mem, memshow [0|1]",
 	"light [raw|-1], tilt, motion, dump, version, help",
-	"sens [2.5|5|10|20|40]: 1 px = N mm of motion",
+	"sens [1:1|2.5|5|10|20|40]: 1 px = N mm of motion",
 	"cal [clear | set ox oy oz sx sy sz gx gy gz]: the fit",
 }
 
@@ -126,12 +126,12 @@ func (a *App) exec(c command) {
 		switch {
 		case !c.hasArg:
 		case c.arg < 0:
-			a.log("sens: one of 2.5 5 10 20 40 (1 px = that many mm)")
+			a.log("sens: one of 1:1 2.5 5 10 20 40 (mm per px)")
 			return
 		default:
 			a.setSens(c.arg)
 		}
-		a.log2("sens: 1 px = ", sensLabels[a.sens])
+		a.logSens("sens: ")
 	case "help":
 		for _, l := range helpLines {
 			a.log(l)

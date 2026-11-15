@@ -15,22 +15,25 @@ func moveUp(a *App, tm *float64, d float64) (windowPx float64) {
 	return float64(y0-b.pose.baseY) / boidsFix * fullCellPx
 }
 
-// The motion sensitivity moves the boids' window (owner 2026-11-14, TG-6
-// #6: he picked the badge up and the flock vanished; 1:1 on the glass a 10
-// cm move was 785 px): by default a 10 cm move is 10 px; at 2.5 mm per px,
-// 40 px.
+// The motion sensitivity moves the boids' window: by default a 10 cm move
+// is 10 px; at 2.5 mm per px, 40 px; at 1:1 the window moves with the badge
+// on the glass, 1 cm = 78 px (320 px across 40.8 mm).
 func TestMotionSensitivityMapsTheBadgesMoveToPixels(t *testing.T) {
 	for _, c := range []struct {
-		choice int
-		want   float64 // px for 10 cm
-	}{{sensDefault, 10}, {0, 40}} {
-		a, tm := motionApp()
-		if c.choice != sensDefault {
-			a.setSens(c.choice)
+		arg  string  // the console's choice
+		d    float64 // m moved
+		want float64 // px
+	}{{sensArgs[sensDefault], 0.10, 10}, {"2.5", 0.10, 40}, {"1:1", 0.01, 0.01 / glassMM * 1000}} {
+		i := sensArg(c.arg)
+		if i < 0 {
+			t.Errorf("no %s choice", c.arg)
+			continue
 		}
-		win := moveUp(a, tm, 0.10)
-		if name := sensLabels[c.choice] + " per px"; win < c.want*0.85 || win > c.want*1.15 {
-			t.Errorf("%s: a 10 cm move took the boids' window %.1f px, want %.0f (±15 %%)", name, win, c.want)
+		a, tm := motionApp()
+		a.setSens(i)
+		win := moveUp(a, tm, c.d)
+		if win < c.want*0.85 || win > c.want*1.15 {
+			t.Errorf("sens %s: a %.0f cm move took the boids' window %.1f px, want %.0f (±15 %%)", c.arg, c.d*100, win, c.want)
 		}
 	}
 }
@@ -42,7 +45,7 @@ func TestChangingTheSensitivityMovesNothing(t *testing.T) {
 	b := a.boids
 	moveUp(a, tm, 0.10)
 	base := b.pose.baseY
-	a.setSens(0)
+	a.setSens(sensArg("2.5"))
 	drive(a, tm, imuRate/2, func(float64) float64 { return 0 }, noAcc, nil)
 	if b.pose.baseY != base {
 		t.Fatalf("the change moved the window %.1f px, want 0", float64(base-b.pose.baseY)/boidsFix*fullCellPx)
@@ -64,10 +67,11 @@ func TestSensCommand(t *testing.T) {
 		a.Update(a.now)
 		return strings.Join(lines, "\n")
 	}
-	if out := run("5"); a.sens != 1 || !strings.Contains(out, "sens: 1 px = 5 mm") {
+	five := sensArg("5")
+	if out := run("5"); a.sens != five || !strings.Contains(out, "sens: 1 px = 5 mm") {
 		t.Fatalf("sens 5: choice %d, said %q; want 5 mm per px", a.sens, out)
 	}
-	if out := run("3"); a.sens != 1 || !strings.Contains(out, "one of 2.5 5 10 20 40 (1 px = that many mm)") {
+	if out := run("3"); a.sens != five || !strings.Contains(out, "one of 1:1 2.5 5 10 20 40") {
 		t.Fatalf("sens 3: choice %d, said %q; want refused, still 5 mm", a.sens, out)
 	}
 	if out := run(""); !strings.Contains(out, "sens: 1 px = 5 mm") {

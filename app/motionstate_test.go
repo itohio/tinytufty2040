@@ -80,11 +80,6 @@ func stroke(dir [3]float64, d, t1, T float64) func(t float64) [3]float64 {
 	}
 }
 
-// glassMM is 1:1 on the glass: the panel's mm per px (320 px across 40.8
-// mm). Tests of which frame moves what pin it (applySens): a 1 cm move is
-// then 78 px, enough to see a jump; the shipped sensitivity is in sens.go.
-const glassMM = 40.8 / 320
-
 func motionApp() (*App, *float64) {
 	a := testApp()
 	a.motion = newMotion()

@@ -309,7 +309,7 @@ func (a *App) pageMotion() *page {
 	// the motion sensitivity (sens.go): "1 px  10 mm" reads 1 px = 10 mm
 	sens := widget.NewInteractiveLabelChoice(52, 11, sensLabels,
 		widget.WithLabelChoiceIndex(&a.sens), widget.WithLabelChoiceFont(fontBody), widget.WithLabelChoiceColor(colFG),
-		widget.WithLabelChoiceChange(func(i int, _ string) { a.setSens(i); a.log2("motion: 1 px = ", sensLabels[i]) }))
+		widget.WithLabelChoiceChange(func(i int, _ string) { a.setSens(i); a.logSens("motion: ") }))
 	p := a.newPageWith("Motion", layout.VFlow(4, 144),
 		still(md.page),
 		newField("Full", 34, 104, full),
