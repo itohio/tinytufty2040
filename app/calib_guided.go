@@ -118,6 +118,7 @@ type guided struct {
 	fitSt  gFit
 	fit    calib.Fit // the fit shown
 	inUse  bool      // a fit corrects the samples
+	fitN   int       // fits solved so far (App.Update logs each new one: calReport)
 	use    calib.Fit // the fit in use (a new fit is only shown until A)
 	txt    [12]textBuf
 }
@@ -268,6 +269,9 @@ func (k *calibration) refit() bool {
 	}
 	fit, err := g.solver.SolveModel(model)
 	g.fit, g.fitSt = fit, fitShown
+	if err == nil {
+		g.fitN++
+	}
 	if err != nil {
 		g.fitSt = fitRefused
 		if !errors.Is(err, calib.ErrIllPosed) {
@@ -497,4 +501,43 @@ func minmax(n int, v, lo, hi float32) (float32, float32) {
 		return v, v
 	}
 	return min(lo, v), max(hi, v)
+}
+
+// calReport logs the calibration as numbers, a line each (they fit the log
+// line): the fit shown (its model, whether it is in use, the residual and
+// the spread, the offsets, scales and gyro bias) and every measured
+// orientation's raw pose (the accelerometer's and gyro's means and noise),
+// from which the fit and gravity's size per orientation can be recomputed.
+// The console's `cal` prints it, and each new fit logs it.
+func (a *App) calReport() {
+	if a.calib == nil {
+		a.log("cal: no IMU")
+		return
+	}
+	g := &a.calib.g
+	t := &a.txtStat
+	if g.fitSt == fitShown || g.fitSt == fitInUse {
+		f := &g.fit
+		a.log(t.reset().str("cal fit ").str(f.Model.String()).str(" in_use ").int(btoi(g.fitSt == fitInUse)).
+			str(" rms ").fixed(f.RMS, 4).str(" cond ").fixed(f.Cond, 2).String())
+		a.log(t.reset().str("cal offset ").fixed(f.Offset[0], 4).str(" ").fixed(f.Offset[1], 4).str(" ").fixed(f.Offset[2], 4).str(" m/s2").String())
+		a.log(t.reset().str("cal scale ").fixed(f.Scale[0], 5).str(" ").fixed(f.Scale[1], 5).str(" ").fixed(f.Scale[2], 5).String())
+		a.log(t.reset().str("cal gyro_bias ").fixed(f.GyroBias[0], 5).str(" ").fixed(f.GyroBias[1], 5).str(" ").fixed(f.GyroBias[2], 5).str(" rad/s").String())
+	} else {
+		a.log("cal fit none: needs 3 orientations on different axes")
+	}
+	n := 0
+	for o := calFace(0); o < 6; o++ {
+		if !g.done[o] {
+			continue
+		}
+		n++
+		p := &g.pose[o]
+		a.log(t.reset().str("cal pose ").str(calFaceShort[o]).str(" acc ").fixed(p.Accel[0], 4).str(" ").fixed(p.Accel[1], 4).str(" ").fixed(p.Accel[2], 4).String())
+		a.log(t.reset().str("cal pose ").str(calFaceShort[o]).str(" gyro ").fixed(p.Gyro[0], 5).str(" ").fixed(p.Gyro[1], 5).str(" ").fixed(p.Gyro[2], 5).String())
+		a.log(t.reset().str("cal pose ").str(calFaceShort[o]).str(" noise ").fixed(norm3f(p.AccelNoise), 4).str(" ").fixed(norm3f(p.GyroNoise), 5).String())
+	}
+	if n == 0 {
+		a.log("cal: no orientations measured (A, Orientations)")
+	}
 }

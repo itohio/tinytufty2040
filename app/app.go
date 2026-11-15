@@ -116,6 +116,7 @@ type App struct {
 	optDialog, resetDialog *widget.Dialog
 	aboutDialog            *widget.Dialog
 	calDialog              *widget.Dialog
+	calLogged              int          // the calibration fits logged so far (calReport)
 	motion                 *motion      // IMU fusion; nil without an IMU
 	calib                  *calibration // the Calibration page's calibrator (with an IMU; runs from power-on)
 	// demo models: they outlive their pages (the Demos page's tiles run them)
@@ -371,6 +372,10 @@ func (a *App) Update(now time.Time) {
 			a.calib.gyroSet = true
 		}
 		a.log("calibrated: gyro bias set")
+	}
+	if a.calib != nil && a.calib.g.fitN != a.calLogged { // each new fit goes to the log as numbers
+		a.calLogged = a.calib.g.fitN
+		a.calReport()
 	}
 	if a.full != nil {
 		w, h := a.full.Size()

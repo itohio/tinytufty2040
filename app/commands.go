@@ -24,12 +24,13 @@ var helpLines = [...]string{
 	"led <0-100>, bl <10-100>, saver [0|1], solid [0-255]",
 	"stats, tiles, frames, mem, memshow [0|1], light [raw|-1], tilt, motion",
 	"sens [2.5|5|10|20|40]: motion sensitivity, 1 px = N mm; dump, version, help",
+	"cal: the calibration fit and its orientations' poses",
 }
 
 // Handlers returns the command table for ui.NewCommandStreamMux.
 func (a *App) Handlers() map[string]func([]byte) {
 	m := map[string]func([]byte){}
-	for _, name := range []string{"up", "down", "a", "b", "c", "user", "page", "led", "bl", "saver", "solid", "stats", "tiles", "frames", "mem", "memshow", "light", "tilt", "motion", "sens", "dump", "version", "help"} {
+	for _, name := range []string{"up", "down", "a", "b", "c", "user", "page", "led", "bl", "saver", "solid", "stats", "tiles", "frames", "mem", "memshow", "light", "tilt", "motion", "sens", "dump", "version", "help", "cal"} {
 		m[name] = func(arg []byte) { a.Command(name, string(arg)) }
 	}
 	return m
@@ -114,6 +115,8 @@ func (a *App) exec(c command) {
 		if c.hasArg {
 			a.health.memShow = c.arg != 0
 		}
+	case "cal": // the calibration fit and its poses, as numbers
+		a.calReport()
 	case "version": // the firmware's build ID (tools/build)
 		a.log2("build ", a.cfg.BuildID)
 	case "motion": // the shared motion state as the demos read it (measurable at rest)
