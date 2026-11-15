@@ -43,12 +43,15 @@ const (
 	boidsOff   = -32768  // a projected point off the view
 )
 
+// the field of view across the view: 40–150° (owner), 110° at first
+const boidsFOVDefault = 7
+
 var (
 	boidsCounts = []string{"32", "64", "128"}
 	boidsN      = [3]int{32, 64, 128}
 	// the view's field across the screen (the projection's width): a choice
-	boidsFOVs      = [...]float32{40, 60, 90}
-	boidsFOVLabels = []string{"40°", "60°", "90°"}
+	boidsFOVs      = [...]float32{40, 50, 60, 70, 80, 90, 100, 110, 120, 130, 140, 150}
+	boidsFOVLabels = []string{"40°", "50°", "60°", "70°", "80°", "90°", "100°", "110°", "120°", "130°", "140°", "150°"}
 )
 
 var boidsPalette = []color.RGBA{
@@ -63,8 +66,9 @@ type boids struct {
 	p, v   [boidsMax][3]int16 // unit position on the sphere (world: z up) and tangent velocity (rad/s), Q14 (boidsQ)
 	hist   [boidsMax][boidsHist][3]int8
 	histI  int
-	count  int // index into boidsN
-	fov    int // index into boidsFOVs
+	count  int       // index into boidsN
+	fov    int       // index into boidsFOVs
+	fovAt  time.Time // when Up/Down in the full view last changed it: the readout fades from then
 	stepUS int64
 	// this frame's camera (camera): the view direction, the screen's right
 	// and up, all world unit vectors, and the projection's scale
@@ -85,7 +89,7 @@ type boids struct {
 }
 
 func newBoids() *boids {
-	b := &boids{count: 1, fov: 1}
+	b := &boids{count: 1, fov: boidsFOVDefault}
 	b.camera()
 	b.reset()
 	b.grid = newBoidsView(b, boidsGridW*boidsPitch, boidsGridH*boidsPitch)
@@ -404,10 +408,18 @@ func (b *boids) fullView() ui.Widget {
 	return nil
 }
 
-// fullPress: A gathers the flock into the view, B back to the page, C
+// fullPress: UP/DOWN widen and narrow the field of view (its readout
+// fades: fovReadout), A gathers the flock into the view, B back to the page, C
 // leaves and changes page.
 func (b *boids) fullPress(btn Button) bool {
 	switch btn {
+	case BtnUp, BtnDown: // the field of view, shown briefly
+		if btn == BtnUp {
+			b.fov = min(b.fov+1, len(boidsFOVs)-1)
+		} else {
+			b.fov = max(b.fov-1, 0)
+		}
+		b.fovAt = time.Now()
 	case BtnA:
 		b.gather()
 	case BtnB:

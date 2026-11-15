@@ -13,7 +13,7 @@ func TestTurningTheBadgeTurnsTheView(t *testing.T) {
 	a, tm := motionApp()
 	b := a.boids
 	b.motion = a.motion
-	b.fov = 2 // 90°
+	b.fov = 5 // 90°
 	b.camera()
 	b.set(0, floatQ(b.look), b.vel(0)) // a boid straight ahead
 	const turn, T, dt = 30 * math.Pi / 180, 1.0, 1.0 / imuRate
@@ -81,5 +81,43 @@ func TestOctantFollowsHeading(t *testing.T) {
 		if got := octant(c.dx, c.dy); got != c.want {
 			t.Errorf("octant(%v, %v) = %d, want %d", c.dx, c.dy, got, c.want)
 		}
+	}
+}
+
+// In the full view UP and DOWN change the field of view in 10° steps between
+// 40° and 150° (110° at first), and its readout shows at once, fades, and is
+// gone 1.5 s after the last change.
+func TestFullViewChangesTheFieldOfView(t *testing.T) {
+	b := newBoids()
+	if boidsFOVs[b.fov] != 110 {
+		t.Fatalf("the field of view starts at %v°, want 110°", boidsFOVs[b.fov])
+	}
+	if _, ok := b.fovReadout(0); ok {
+		t.Fatal("a readout before any change")
+	}
+	for range 10 {
+		b.fullPress(BtnUp)
+	}
+	if boidsFOVs[b.fov] != 150 {
+		t.Fatalf("ten UPs: %v°, want 150° (the widest)", boidsFOVs[b.fov])
+	}
+	for range 20 {
+		b.fullPress(BtnDown)
+	}
+	if boidsFOVs[b.fov] != 40 {
+		t.Fatalf("twenty DOWNs: %v°, want 40° (the narrowest)", boidsFOVs[b.fov])
+	}
+	b.fullPress(BtnUp)
+	if boidsFOVs[b.fov] != 50 {
+		t.Fatalf("UP from 40°: %v°, want 50°", boidsFOVs[b.fov])
+	}
+	if c, ok := b.fovReadout(0); !ok || c != colFG {
+		t.Fatalf("just changed: readout %v (shown %v), want the text colour", c, ok)
+	}
+	if c, ok := b.fovReadout(boidsFOVHold + boidsFOVFade/2); !ok || c == colFG || c == boidsViewBG {
+		t.Fatalf("half faded: readout %v (shown %v), want between the text and the background", c, ok)
+	}
+	if _, ok := b.fovReadout(boidsFOVHold + boidsFOVFade); ok {
+		t.Fatal("1.5 s after the change the readout still shows")
 	}
 }

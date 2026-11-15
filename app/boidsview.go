@@ -2,6 +2,7 @@ package app
 
 import (
 	"image/color"
+	"time"
 
 	ui "github.com/itohio/tinygui"
 )
@@ -55,6 +56,29 @@ func octant(dx, dy float32) uint8 {
 	return (8 - o) % 8
 }
 
+// the full view's field-of-view readout: solid for boidsFOVHold after a
+// change, then fading into the background over boidsFOVFade
+const (
+	boidsFOVHold = 700 * time.Millisecond
+	boidsFOVFade = 800 * time.Millisecond
+)
+
+// fovReadout is the readout's colour since the last change; false once it
+// has faded (or before any change).
+func (b *boids) fovReadout(since time.Duration) (color.RGBA, bool) {
+	if b.fovAt.IsZero() || since >= boidsFOVHold+boidsFOVFade {
+		return color.RGBA{}, false
+	}
+	k := int32(256)
+	if since > boidsFOVHold {
+		k = int32(256 - (since-boidsFOVHold)*256/boidsFOVFade)
+	}
+	return color.RGBA{mix8(colFG.R, boidsViewBG.R, k), mix8(colFG.G, boidsViewBG.G, k), mix8(colFG.B, boidsViewBG.B, k), 255}, true
+}
+
+// mix8 is f·k + g·(1 − k), k in 256ths.
+func mix8(f, g uint8, k int32) uint8 { return uint8((int32(f)*k + int32(g)*(256-k)) >> 8) }
+
 func (v *boidsView) Draw(ctx ui.Context) {
 	d := ctx.D()
 	x0, y0 := ctx.DisplayPos()
@@ -62,6 +86,10 @@ func (v *boidsView) Draw(ctx ui.Context) {
 	b := v.b
 	if v == b.full {
 		drawSettling(d, b.motion, x0, y0, int16(v.Width), int16(v.Height))
+		if c, ok := b.fovReadout(time.Since(b.fovAt)); ok {
+			l := boidsFOVLabels[b.fov]
+			ui.DrawText(d, fontBody, x0+(int16(v.Width)-textWidth(fontBody, l))/2, y0+14, l, c)
+		}
 	}
 	// the frame's projection (boids.frame, once per tick): only scaling here
 	cx, cy, s := int32(x0)+int32(v.Width)/2, int32(y0)+int32(v.Height)/2, int32(v.Width)/2
