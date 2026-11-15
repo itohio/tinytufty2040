@@ -5,7 +5,7 @@ What the Tufty 2040 can draw with TinyGo, measured, and the demos the owner aske
 
 ## How every step is verified (owner's standing rule)
 
-Flash the badge → drive it over USB serial (`badgectl`, [commands](commands.md)) → capture with the badge cam (`badgectl --grab`, the grab tool in `BADGECAM_GRAB`) → compare with the host simulator and the framebuffer dump → improve. Each demo lands as small commits that build, pass their tests and were seen on the badge.
+Flash the badge → drive it over USB serial (`badgectl`, [commands](commands.md)) → capture with the badge cam (`badgectl --grab`, the frame the camera client serves at `BADGECAM_URL`) → compare with the host simulator and the framebuffer dump → improve. Each demo lands as small commits that build, pass their tests and were seen on the badge.
 
 ## Measured (2026-11-12, `bench`)
 

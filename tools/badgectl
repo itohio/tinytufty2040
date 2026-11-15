@@ -16,13 +16,14 @@ CMD is a console command ('up', 'a long', 'page 3', 'stats', …; 'help' lists
 them) or a tour step: up|down|a|b|c[+] (+ = long), user:<ms>, wait:<frames>,
 shot:<name>, sleep:<seconds>.
 """
-import argparse, os, subprocess, sys, time
+import argparse, os, sys, time, urllib.request
 import serial
 from serial.tools import list_ports
 
-# The badge-cam tool: set BADGECAM_GRAB to its path for photos (--grab,
-# --tour); without it there are none, and the first request says so.
-GRAB = os.environ.get("BADGECAM_GRAB", "")
+# Badge-cam photos (--grab, --tour): the frame the owner's camera client
+# serves; BADGECAM_URL overrides it.
+CAM_URL = os.environ.get("BADGECAM_URL", "http://127.0.0.1:8765/frame.jpg")
+cam_n = 0  # photos taken: their file names
 FRAME = 1 / 30  # the badge's frame period (33 ms)
 CAM_BOX = (485, 327, 1520, 1153)  # badge screen in the 2048×1536 cam frame (--cam-box)
 CAM_FLIP = False  # the cam firmware un-mirrors since 16:29 (hm=1); --cam-flip for older frames
@@ -98,46 +99,30 @@ PACE = 0.0  # --pace: extra seconds after every tour step (for a human watching)
 NO_CAM = False  # --no-cam: never touch the camera (someone else is using it)
 
 
-RELAY = "http://127.0.0.1:8765/snapshot"  # the owner's camera page relays frames while connected
-
-
-def relay_snapshot(out_dir):
-    """Latest frame through the owner's connected camera page; None if absent."""
-    import json, shutil, urllib.request
-    try:
-        req = urllib.request.Request(RELAY, method="POST")
-        with urllib.request.urlopen(req, timeout=10) as r:
-            path = json.load(r).get("path")
-    except Exception:
-        return None
-    if not path or not os.path.exists(path):
-        return None
-    dst = os.path.join(out_dir, os.path.basename(path))
-    shutil.copy(path, dst)
-    return dst
-
-
-def grab(out_dir, tries=3):
-    """Badge-cam photo: the badge-cam grab tool (BADGECAM_GRAB, which applies
-    the camera's saved settings); when the owner's camera page holds the port
-    ('port busy'), the frame his page relays. Returns the JPEG path or None."""
-    global NO_CAM
+def grab(out_dir):
+    """Badge-cam photo: the frame the owner's camera client serves over HTTP
+    (BADGECAM_URL), saved into out_dir. Returns the JPEG path or None; a
+    failed fetch is said once and photos stop."""
+    global NO_CAM, cam_n
     if NO_CAM:
         return None
-    if not GRAB:
-        print("grab: no photos: set BADGECAM_GRAB to the badge-cam grab tool", file=sys.stderr)
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))  # localhost: never through a proxy
+    try:
+        with opener.open(CAM_URL, timeout=10) as r:
+            data = r.read()
+    except Exception as e:
+        print(f"grab: no photo from {CAM_URL}: {e}", file=sys.stderr)
         NO_CAM = True  # said once
         return None
-    for _ in range(tries):
-        r = subprocess.run([GRAB, "--out", out_dir], capture_output=True, text=True)
-        out = (r.stdout + r.stderr).strip().splitlines()
-        if r.returncode == 0 and out and out[-1].endswith(".jpg") and os.path.exists(out[-1]):
-            return out[-1]
-        if any("busy" in line for line in out):
-            time.sleep(1.0)  # let the page's stream catch up with the last input
-            return relay_snapshot(out_dir)
-        print(f"grab: {out[-1] if out else 'no output'}", file=sys.stderr)
-    return None
+    if not data.startswith(b"\xff\xd8"):
+        print(f"grab: {CAM_URL} did not return a JPEG", file=sys.stderr)
+        NO_CAM = True
+        return None
+    cam_n += 1
+    dst = os.path.join(out_dir, f"cam-{time.strftime('%H%M%S')}-{cam_n}.jpg")
+    with open(dst, "wb") as f:
+        f.write(data)
+    return dst
 
 
 def step_to_command(step):
