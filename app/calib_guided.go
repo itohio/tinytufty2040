@@ -281,6 +281,11 @@ func (k *calibration) refit() bool {
 	return true
 }
 
+// putInUse puts a fit in use and shows it (a saved one at boot, or cal set).
+func (k *calibration) putInUse(f calib.Fit) {
+	k.g.fit, k.g.use, k.g.inUse, k.g.fitSt = f, f, true, fitInUse
+}
+
 // useFit puts the shown fit in use (A on it).
 func (k *calibration) useFit() {
 	k.g.use, k.g.inUse, k.g.fitSt = k.g.fit, true, fitInUse

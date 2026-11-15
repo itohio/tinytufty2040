@@ -38,6 +38,9 @@ type Config struct {
 	// BuildID names the firmware (git commits, dirty flag, build time):
 	// `version` and `stats` report it (tools/build sets it).
 	BuildID string
+	// CalStore keeps the calibration across power-off (the badge's flash).
+	// May be nil: nothing is saved.
+	CalStore CalStore
 }
 
 // Button is a physical badge button.
@@ -116,9 +119,13 @@ type App struct {
 	optDialog, resetDialog *widget.Dialog
 	aboutDialog            *widget.Dialog
 	calDialog              *widget.Dialog
-	calLogged              int          // the calibration fits logged so far (calReport)
-	motion                 *motion      // IMU fusion; nil without an IMU
-	calib                  *calibration // the Calibration page's calibrator (with an IMU; runs from power-on)
+	calLogged              int // the calibration fits logged so far (calReport)
+	calStore               CalStore
+	calRec                 [calRecordSize]byte // the saved calibration's record, read or written
+	calSaved               calSavedState       // what is saved (cal's first line)
+	calSavedErr            error               // why the saved one isn't used
+	motion                 *motion             // IMU fusion; nil without an IMU
+	calib                  *calibration        // the Calibration page's calibrator (with an IMU; runs from power-on)
 	// demo models: they outlive their pages (the Demos page's tiles run them)
 	life                   *life
 	water                  *water
@@ -302,6 +309,8 @@ func New(d ui.Displayer, hw Hardware, cfg Config, now time.Time) *App {
 	a.showPage(0)
 	a.applyLED()
 	hw.SetBacklight(a.backlight)
+	a.calStore = cfg.CalStore
+	a.calLoad()
 	a.log("tinygui showcase ready")
 	return a
 }

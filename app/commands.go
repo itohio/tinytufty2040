@@ -25,7 +25,7 @@ var helpLines = [...]string{
 	"stats, tiles, frames, mem, memshow [0|1]",
 	"light [raw|-1], tilt, motion, dump, version, help",
 	"sens [2.5|5|10|20|40]: 1 px = N mm of motion",
-	"cal: the calibration fit and its orientations' poses",
+	"cal [clear | set ox oy oz sx sy sz gx gy gz]: the fit",
 }
 
 // Handlers returns the command table for ui.NewCommandStreamMux.
@@ -116,8 +116,8 @@ func (a *App) exec(c command) {
 		if c.hasArg {
 			a.health.memShow = c.arg != 0
 		}
-	case "cal": // the calibration fit and its poses, as numbers
-		a.calReport()
+	case "cal": // the calibration as numbers; clear, set (calCommand)
+		a.calCommand(c.text)
 	case "version": // the firmware's build ID (tools/build)
 		a.log2("build ", a.cfg.BuildID)
 	case "motion": // the shared motion state as the demos read it (measurable at rest)

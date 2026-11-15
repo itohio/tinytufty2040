@@ -67,6 +67,7 @@ func main() {
 		DurationSub: ui.DurationSub,
 		Log:         func(s string) { var l console.Line; l.S(s).Send(&con) },
 		BuildID:     buildID,
+		CalStore:    flashCalStore{}, // the calibration across power-off: the flash's last sector
 	}, time.Now())
 	boot("app")
 	if !imuOK {
