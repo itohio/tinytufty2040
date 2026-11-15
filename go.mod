@@ -22,6 +22,6 @@ require github.com/itohio/EasyRobot v0.0.0
 
 // EasyRobot (MPU6050 driver, Mahony, strapdown, flip) is developed next to
 // this repo too; the demo builds against the local checkout. Built and
-// verified against EasyRobot e54c076 (flip's ER-061 commits: divide-free
-// division, solve, separation, blend, toGrid; the same liquid).
+// verified against EasyRobot 2f3bd35 (the multi-pose calibration solver,
+// CAL-1; before it 4a816e3, flip's ER-061 commits).
 replace github.com/itohio/EasyRobot => ../EasyRobot

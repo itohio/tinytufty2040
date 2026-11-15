@@ -35,6 +35,14 @@ func (t *textBuf) int(v int) *textBuf {
 	return t.str(unsafe.String(&tmp[i], len(tmp)-i))
 }
 
+// sint writes v with its sign, + for zero and up.
+func (t *textBuf) sint(v int) *textBuf {
+	if v >= 0 {
+		t.str("+")
+	}
+	return t.int(v)
+}
+
 // pad2 writes v with at least two digits.
 func (t *textBuf) pad2(v int) *textBuf {
 	if v < 10 {

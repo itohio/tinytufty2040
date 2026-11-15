@@ -58,7 +58,7 @@ func TestPagesDrawFramesWithoutAllocating(t *testing.T) {
 // close; then C walks every page doing its usual interactions (edits, list
 // scrolling, each demo's Full view) and wraps back to Demos.
 var menuRound = []struct{ page, steps string }{
-	{"Calib", "u u a f"}, // A: a calibration started afresh
+	{"Calib", "u u a u a f"}, // A, up to "This pose", A: a calibration started afresh
 	{"Demos", "u u u u u u a f b d a f b d a f b d a f b d a f b d a b b d d d a"},
 	{"Dash", "d d u u"},
 	{"Gauge", "u u u a u a"},

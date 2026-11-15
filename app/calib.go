@@ -55,6 +55,8 @@ type calibrator interface {
 	stats(i int) (mean, spread float32)
 	// thresholds are the spreads under which each sensor counts as still
 	thresholds() (acc, gyro float32)
+	// pose is a finished run as a still pose (the guided calibration)
+	pose() (calib.Pose, bool)
 }
 
 // calStage is what the page shows: the calibrator's phase, held long
@@ -123,9 +125,12 @@ const (
 	calWaitText = "Waiting for it to settle..."
 	calMeasText = "Measuring - keep still"
 	calMoveText = "Moved - starting again"
-	calDoneText = "Calibrated"
+	calDoneText = "Gyro measured (this pose)"
+	// what a single pose did and didn't, under the ring: its result is
+	// shown, not applied (the motion state learns its own gyro bias)
+	calDoneNote = "shown, not used: the|faces calibrate the|accelerometer and gyro"
 	calPrompt   = "keep still"
-	calAgain    = "A: recalibrate"
+	calAgain    = "A: calibrate"
 )
 
 var (
@@ -149,13 +154,21 @@ type calibration struct {
 	bands  [6]*widget.StatBand
 	target [6]float32 // each axis's slow average: the strip's centre
 	primed bool       // target holds a first mean
+	face   calFace    // the face the strips' averages were primed on
+	settle bool       // turned onto another face: re-prime until it lies still again
 	state  [6]uint8   // 0 ok, 1 drift, 2 noisy (calChips; the band's colour)
 	res    calResult  // the last completed calibration (its forecast on the done state)
 	txt    [3]textBuf // the forecast's values and line
+	g      guided     // the guided calibration on several faces
 }
 
 func newCalibration(c calibrator) *calibration {
 	k := &calibration{c: c}
+	s, err := calib.NewSolver(calib.DefaultConfig())
+	if err != nil {
+		panic("calib: " + err.Error()) // DefaultConfig is valid
+	}
+	k.g.solver = s
 	style := widget.RingStyle{Track: calTrack, Fill: calFill, BG: colBG, Font: fontTitle, Label: colFG}
 	opts := []widget.RingOption{widget.WithThickness(12), widget.WithCap(widget.RingCapRound), widget.WithPercentLabel()}
 	k.ring = widget.NewRing(calRingD, calRingD, &k.pct, 0, 100, style, opts...)
@@ -179,10 +192,13 @@ func newCalibration(c calibrator) *calibration {
 // add feeds one IMU sample to the calibrator.
 func (k *calibration) add(acc, gyro [3]float32, dt float32) { k.c.add(acc, gyro, dt) }
 
-// again starts a calibration afresh (A on the page).
+// again starts a single-pose calibration afresh (the overlay's first
+// choice): the page shows it; a guided result not used is dropped, a fit
+// in use stays in use.
 func (k *calibration) again() {
 	k.c.reset()
 	k.start, k.movedAt, k.applied = time.Time{}, time.Time{}, false
+	k.g.stage = gOff
 }
 
 // update moves the page on to now (once per frame): the stage, and one
@@ -196,6 +212,10 @@ func (k *calibration) update(now time.Time) bool {
 	p := k.c.phase()
 	if p == calMoved {
 		k.movedAt = now
+	}
+	if k.g.stage != gOff {
+		k.updateGuided(now)
+		return false
 	}
 	switch {
 	case p == calDone:
@@ -222,6 +242,33 @@ func (k *calibration) update(now time.Time) bool {
 // the sensor's threshold.
 func (k *calibration) pushStats() {
 	accT, gyroT := k.c.thresholds()
+	// turned onto another face, gravity is on another axis: the slow
+	// averages start again there, or a turn reads as drift for seconds
+	// (owner: "drift" on the strips after "Calibrated", standing it on an
+	// edge)
+	var f [3]float32
+	for i := range f {
+		f[i], _ = k.c.stats(i)
+	}
+	if face := faceOf(f); face != k.face {
+		k.face, k.settle = face, true
+	}
+	if k.settle {
+		// the averages follow the means until every axis is still: set down
+		// on an edge, the last of the turn settles after the face changed
+		k.primed = false
+		still := true
+		for i := range k.bands {
+			thr := accT
+			if i >= 3 {
+				thr = gyroT
+			}
+			if _, spread := k.c.stats(i); spread >= thr {
+				still = false
+			}
+		}
+		k.settle = !still
+	}
 	for i, b := range k.bands {
 		mean, spread := k.c.stats(i)
 		if !k.primed {
@@ -255,6 +302,9 @@ func abs32f(v float32) float32 {
 
 // line is the sentence at the top and its colour.
 func (k *calibration) line() (string, color.RGBA) {
+	if k.guiding() {
+		return k.guidedLine()
+	}
 	switch k.stage {
 	case calShowWaiting:
 		return calWaitText, colMuted
@@ -268,11 +318,35 @@ func (k *calibration) line() (string, color.RGBA) {
 	return calInstr, colMuted
 }
 
-// pageCalib is the Calibration page: one view, which A acts on (again).
+// guiding reports whether the page shows the guided calibration.
+func (k *calibration) guiding() bool { return k.g.stage != gOff }
+
+// pageCalib is the Calibration page: one view, which A acts on (act) and,
+// on a guided result, B too (back).
 func (a *App) pageCalib() *page {
-	view := &calibView{WidgetBase: ui.NewWidgetBase(innerW, bodyH-12), k: a.calib,
-		again: func() { a.calib.again(); a.log("calibration started again") }}
+	view := &calibView{WidgetBase: ui.NewWidgetBase(innerW, bodyH-12), k: a.calib, press: a.calibAct,
+		onB: func() bool {
+			if s := a.calib.g.stage; s != gResult && s != gRefused {
+				return false
+			}
+			a.calib.discard(a.now)
+			a.log("calibration discarded")
+			return true
+		}}
 	return a.newPageWith("Calib", layout.VList(0), view)
+}
+
+// calibAct is A on the Calibration page: on a guided result it uses the
+// fit; otherwise it offers the three calibrations (the highlight on
+// 3 faces).
+func (a *App) calibAct() {
+	if a.calib.g.stage == gResult {
+		a.calib.useFit()
+		a.log2("calibration in use: ", a.calib.g.fit.Model.String())
+		return
+	}
+	a.overlay.OpenCentered(a.calDialog)
+	a.calDialog.Interact(ui.DOWN)
 }
 
 // calibView draws the page: the state line, the ring with the percentage
@@ -281,14 +355,19 @@ func (a *App) pageCalib() *page {
 type calibView struct {
 	ui.WidgetBase
 	k     *calibration
-	again func()
+	press func()
+	onB   func() bool
 	ctx   ui.ContextImpl    // the ring's context (fields: no allocation per draw)
 	bctx  [6]ui.ContextImpl // the strips'
 }
 
-// activate starts a calibration afresh: A on the page acts at once, with no
-// edit mode, like a demo tile (App.enter).
-func (v *calibView) activate() { v.again() }
+// activate is A on the page: it acts at once, with no edit mode, like a
+// demo tile (App.enter).
+func (v *calibView) activate() { v.press() }
+
+// backs is B on the page: true when the page took it (a guided result
+// discarded), so it doesn't go back a page.
+func (v *calibView) backs() bool { return v.onB() }
 
 func (v *calibView) Draw(ctx ui.Context) {
 	d := ctx.D()
@@ -300,17 +379,27 @@ func (v *calibView) Draw(ctx ui.Context) {
 
 	// the ring: the main cue
 	ring := k.ring
-	if k.stage == calShowDone {
+	guided := k.guiding()
+	if k.stage == calShowDone && !guided || guided && (k.g.stage >= gResult || k.g.stage == gFaceDone) {
 		ring = k.ringDone
 	}
 	v.ctx = ui.NewContext(d, calRingD, calRingD, x0+calRingX, y0+calRingY)
 	ring.Draw(&v.ctx)
 	cx := x0 + calRingX + calRingD/2
-	if w := calStateWords[k.stage]; w != "" {
+	w := calStateWords[k.stage]
+	if guided {
+		w = ""
+		if int(k.g.stage) < len(gWords) {
+			w = gWords[k.g.stage]
+		}
+	}
+	if w != "" {
 		ui.DrawText(d, fontSmall, cx-textWidth(fontSmall, w)/2, y0+calRingY+calRingD/2+18, w, calChrome)
 	}
-	if k.stage == calShowDone {
-		v.forecast(d, x0, y0+calRingY+calRingD+6)
+	if guided {
+		v.guidedPanel(d, x0, y0+calRingY+calRingD+6)
+	} else if k.stage == calShowDone {
+		v.doneNote(d, x0, y0+calRingY+calRingD+6)
 	} else {
 		ui.DrawText(d, fontBody, cx-textWidth(fontBody, calPrompt)/2, y0+calRingY+calRingD+22, calPrompt, calThr)
 	}
@@ -359,6 +448,38 @@ const (
 	calFcHeadFS = 6  // heading scale, °/min
 	calFcPosFS  = 10 // position scale, cm/min
 )
+
+// doneNote is the single pose's done panel with its top at y: what it set
+// and what it didn't (calDoneNote, its lines split at |),
+// the forecast's one line, and A.
+func (v *calibView) doneNote(d drivers.Displayer, x0, y int16) {
+	s, i := calDoneNote, 0
+	for len(s) > 0 {
+		j := 0
+		for j < len(s) && s[j] != '|' {
+			j++
+		}
+		panelLine(d, x0+4, y-2, i, s[:j], calChrome)
+		if j < len(s) {
+			j++
+		}
+		s, i = s[j:], i+1
+	}
+	t, c := v.forecastLine()
+	panelLine(d, x0+4, y-2, i, t, c)
+	ui.DrawText(d, fontBody, x0+4, y+54, calAgain, calThr)
+}
+
+// forecastLine is the forecast's sentence: the drift to expect and its
+// verdict.
+func (v *calibView) forecastLine() (string, color.RGBA) {
+	f := v.k.res.forecast
+	t := v.k.txt[2].reset().str("Expect ").fixed(f.PosDrift+f.PosNoise, 1).str("cm/m ").fixed(f.HeadingDrift+f.HeadingNoise, 1).str("d/m")
+	if f.PosDrift+f.PosNoise <= f.PosOK && f.HeadingDrift+f.HeadingNoise <= f.HeadingOK {
+		return t.str(": fine").String(), calOK
+	}
+	return t.str(": watch").String(), calWarnC
+}
 
 // forecast draws the expectation block with its top at y.
 func (v *calibView) forecast(d drivers.Displayer, x0, y int16) {

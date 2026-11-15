@@ -115,6 +115,7 @@ type App struct {
 	optLabels              []string // the Demos options dialog's labels (first: Pause/Resume all)
 	optDialog, resetDialog *widget.Dialog
 	aboutDialog            *widget.Dialog
+	calDialog              *widget.Dialog
 	motion                 *motion      // IMU fusion; nil without an IMU
 	calib                  *calibration // the Calibration page's calibrator (with an IMU; runs from power-on)
 	// demo models: they outlive their pages (the Demos page's tiles run them)
@@ -135,6 +136,7 @@ type App struct {
 	solid                  int     // grey level of a uniform test screen, -1: off
 	overlay                *container.Overlay
 	imagePage              int       // index of the Image page (the plasma animates only there)
+	calibPage              int       // index of the Calibration page (-1 without an IMU)
 	full                   ui.Widget // a demo drawn full screen instead of the UI
 	fullCtx                ui.ContextImpl
 	speedMS                int
@@ -273,6 +275,7 @@ func New(d ui.Displayer, hw Hardware, cfg Config, now time.Time) *App {
 	}
 	a.pages = container.NewPages(ScreenW, bodyH, specs, container.WithHistory(pagesHistory)) // default: every page kept
 	a.imagePage = a.pageIndex("Image")
+	a.calibPage = a.pageIndex("Calib")
 	a.tabs = newTabBar(ScreenW, tabsH, names)
 	a.footer = widget.NewLabel(ScreenW-8, footerH-3, fontBody, a.footerText, colMuted)
 	a.root = container.New[ui.Widget](ScreenW, ScreenH,
@@ -291,6 +294,9 @@ func New(d ui.Displayer, hw Hardware, cfg Config, now time.Time) *App {
 	}, &colAccent)
 
 	a.initMenuDialogs()
+	if a.calib != nil {
+		a.initCalibDialog()
+	}
 	a.pages.BuildAll() // every page now: nothing is built (allocated) later
 	a.showPage(0)
 	a.applyLED()
@@ -439,6 +445,10 @@ func (a *App) footerText() string {
 		t.str("EDIT up/dn  A ok  B cancel")
 	case a.motion.settling():
 		t.str(settlingText)
+	case a.cur == a.calibPage && a.calib.g.stage == gResult:
+		t.str("A use it  B discard")
+	case a.cur == a.calibPage && a.calib.g.stage == gInUse:
+		t.str("A calibrate again  C page")
 	default:
 		t.str("up/dn focus  A ok  B back  C page")
 	}
@@ -526,6 +536,9 @@ func (a *App) Press(b Button, long bool) {
 			return
 		}
 		if p.nav.Depth() == 1 && !p.root.Active() { // nothing to leave inside the page
+			if bk, ok := p.nav.Current().(interface{ backs() bool }); ok && bk.backs() {
+				return // the page took it (the Calibration page's result)
+			}
 			if p.demo == a.menu {
 				a.menuOptions() // the home page: its options
 			} else if a.pages.Back() {

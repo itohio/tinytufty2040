@@ -29,7 +29,7 @@ for _ in range(5):  # Life, Water, Fire, Pong, Boids tiles: full screen and back
 demos += ["a", "b",                       # the speed dropdown: open, close
           "b", "down", "down", "down", "a"]  # B: the options dialog, Close
 pages = [
-    ("Calib", top(2) + ["a"]),                                  # A: a calibration afresh
+    ("Calib", top(2) + ["a", "up", "a"]),                       # A, up to "This pose", A: a calibration afresh
     ("Demos", demos),
     ("Dash", ["down", "down", "up", "up"]),
     ("Gauge", top(3) + ["a", "up", "a"]),                       # edit the level

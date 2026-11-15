@@ -23,7 +23,7 @@ import (
 // Checked on the firmware build (TinyGo keeps less on the stack there than
 // on the host).
 var setupFuncs = map[string]bool{
-	"New": true, "App.initDemos": true, "App.initLive": true, "App.initMenuDialogs": true, "App.Handlers": true,
+	"New": true, "App.initDemos": true, "App.initLive": true, "App.initMenuDialogs": true, "App.initCalibDialog": true, "App.Handlers": true,
 	"App.newMenu": true, "newTile": true, "App.pageDemos": true,
 	"App.newPageOpt": true, "App.caption": true,
 	"App.pageDashboard": true, "App.pageGauges": true, "App.pageControls": true, "App.pagePictures": true,

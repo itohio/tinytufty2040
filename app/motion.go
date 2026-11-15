@@ -155,6 +155,9 @@ func (a *App) SetIMU(acc, gyro [3]float32, dt float32) {
 	}
 	if a.calib != nil { // the Calibration page's calibrator; the motion state runs on regardless
 		a.calib.add(acc, gyro, dt)
+		// a guided calibration in use corrects what the motion state gets;
+		// the calibrator keeps the raw samples (it measures them)
+		acc, gyro = a.calib.correct(acc, gyro)
 	}
 	m.samples++
 	m.learnBias(acc, gyro)
