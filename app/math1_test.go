@@ -39,8 +39,12 @@ func (r *rig) feed(acc, gyro [3]float32, dt float32) {
 	}
 }
 
-// paddle in cells (top), window in cells (box base, right and up)
-func (r *rig) paddle() float64 { return float64(r.a.pong.pad[0]) / pongFix }
+// paddle in cells (top), window in cells (box base, right and up).
+// Pong's paddle follows pitch, no longer the badge's displacement, so the
+// vertical display these targets measure is the boids window's: it follows
+// the badge's own up axis at the same sensitivity, cells and sign as the
+// paddle did.
+func (r *rig) paddle() float64 { _, y := r.window(); return y }
 func (r *rig) window() (float64, float64) {
 	b := r.a.boids
 	return float64(b.pose.baseX) / boidsFix, float64(b.pose.baseY) / boidsFix

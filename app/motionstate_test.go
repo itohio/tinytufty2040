@@ -131,11 +131,11 @@ func TestTiltAloneDoesNotTranslate(t *testing.T) {
 	}
 }
 
-// The paddle follows the badge's own up axis (owner: "vertical position in
-// the badge frame of reference"): tilted 45°, a move along the badge's up
-// axis moves the paddle 1:1 on the glass, a move straight up in the world
-// by cos 45°.
-func TestPaddleFollowsTheBadgesOwnUpAxis(t *testing.T) {
+// The boids' window follows the badge's own up axis (owner: "vertical
+// position in the badge frame of reference"; Pong's paddle did until
+// PONG-PITCH-1): tilted 45°, a move along the badge's up axis moves the
+// window 1:1 on the glass, a move straight up in the world by cos 45°.
+func TestWindowFollowsTheBadgesOwnUpAxis(t *testing.T) {
 	const cellsPerM = 320.0 / 40.8 / 5 * 1000 // the panel: 320 px over 40.8 mm, 5 px per cell
 	const d = 0.015                           // m: 23.5 cells, inside the 40-cell travel
 	for _, c := range []struct {
@@ -148,20 +148,18 @@ func TestPaddleFollowsTheBadgesOwnUpAxis(t *testing.T) {
 	} {
 		a, tm := motionApp()
 		a.applySens(glassMM) // which axis moves it, at 1:1
-		p := a.pong
+		b := a.boids
 		t1 := *tm
 		tilt := func(t float64) float64 { return math.Pi / 4 * smooth(t-t1) }
 		drive(a, tm, 3*imuRate, tilt, noAcc, nil) // turn 45° and rest
 		held := func(float64) float64 { return math.Pi / 4 }
-		p.pad[0] = (pongH - pongPadLen) * pongFix // from the bottom: room to rise
-		p.showFull()
-		pad0 := p.pad[0]
+		y0 := b.pose.baseY
 		x, y, _ := badgeAxes(math.Pi / 4)
 		// a brisk 0.5 s stroke: gentler than ~0.2 m/s² reads as rest to the strapdown
-		drive(a, tm, 3*imuRate, held, stroke(c.dir(x, y), d, *tm, 0.5), func(int) { p.tick() })
-		moved := float64(pad0-p.pad[0]) / pongFix
+		drive(a, tm, 3*imuRate, held, stroke(c.dir(x, y), d, *tm, 0.5), nil)
+		moved := float64(y0-b.pose.baseY) / boidsFix
 		if moved < c.want*0.85 || moved > c.want*1.15 {
-			t.Errorf("%s %.1f cm: paddle up %.1f cells, want %.1f (±15 %%)", c.name, d*100, moved, c.want)
+			t.Errorf("%s %.1f cm: window up %.1f cells, want %.1f (±15 %%)", c.name, d*100, moved, c.want)
 		}
 	}
 }
@@ -439,12 +437,12 @@ func TestStillBadgeRightAfterBootKeepsPaddleAndWindowStill(t *testing.T) {
 // for a moment (seen on the badge: rest 97 %, the paddle moved 17 px, 2.2 mm,
 // in 30 s on a still badge). At accelerometer noise 0.04 m/s² and gyro
 // 0.005 rad/s the host shows the same: rest 96 %, 16 false starts in
-// 120 s. The paddle and the window must stay still through all of them.
-func TestNoisyStillBadgeKeepsPaddleAndWindowStill(t *testing.T) {
+// 120 s. The window must stay still through all of them (Pong's paddle
+// follows pitch since PONG-PITCH-1: TestPongPitchStillHandKeepsThePaddle).
+func TestNoisyStillBadgeKeepsTheWindowStill(t *testing.T) {
 	a := testApp()
 	a.motion = newMotion()
-	a.pong.motion = a.motion
-	p, b := a.pong, a.boids
+	b := a.boids
 	r := rand.New(rand.NewPCG(7, 8))
 	off := [3]float32{0.25, -0.35, 0.3}
 	gb := [3]float32{0.01, -0.012, 0.006}
@@ -457,22 +455,13 @@ func TestNoisyStillBadgeKeepsPaddleAndWindowStill(t *testing.T) {
 	for range 3 * imuRate {
 		sample()
 	}
-	p.showFull()
-	p.fullPress(BtnA)
-	lo, hi := p.pad[0], p.pad[0]
 	wx0, wy0 := b.pose.baseX, b.pose.baseY
 	wmax := int32(0)
 	for i := range 120 * imuRate {
 		sample()
 		if i%3 == 2 {
-			p.tick()
-			lo, hi = min(lo, p.pad[0]), max(hi, p.pad[0])
 			wmax = max(wmax, abs32(b.pose.baseX-wx0), abs32(b.pose.baseY-wy0))
 		}
-	}
-	const px = pongFix / 5
-	if hi-lo > px {
-		t.Errorf("noisy still badge: the paddle wandered %.1f px in 120 s, want ≤ 1", float64(hi-lo)/px)
 	}
 	if wmax > boidsFix {
 		t.Errorf("noisy still badge: the window wandered %.1f cells in 120 s, want ≤ 1", float64(wmax)/boidsFix)
@@ -498,41 +487,39 @@ func TestQuickStrokesRegister(t *testing.T) {
 	}
 }
 
-// The paddle follows a hand move as it happens (owner, TG-5 #2: "not
+// The display follows a hand move as it happens (owner, TG-5 #2: "not
 // responding (jumps around)"): moving the badge up 1 cm in 0.6 s, the
-// paddle starts within 0.25 s, never jumps more than 25 px in a frame, and
-// ends 1:1. The false-start gate (an episode counted only after 1.5 mm and
-// 0.45 s) held it still for half a second and then jumped it 78 px at once.
-func TestPaddleFollowsAHandMoveSmoothly(t *testing.T) {
+// boids' window (Pong's paddle until PONG-PITCH-1) starts within 0.25 s,
+// never jumps more than 25 px in a frame, and ends 1:1. The false-start gate
+// (an episode counted only after 1.5 mm and 0.45 s) held it still for half
+// a second and then jumped it 78 px at once.
+func TestDisplayFollowsAHandMoveSmoothly(t *testing.T) {
 	a, tm := motionApp()
 	a.applySens(glassMM)
-	p := a.pong
-	p.showFull()
-	p.fullPress(BtnA) // paused: only the badge moves the paddle
+	b := a.boids
 	const start, frameS = 0.1, 3.0 / imuRate
-	pad0, prev := p.pad[0], p.pad[0]
+	pad0, prev := b.pose.baseY, b.pose.baseY
 	firstMove, frames, maxStep := -1.0, 0, int32(0)
 	drive(a, tm, 2*imuRate, func(float64) float64 { return 0 }, stroke([3]float64{0, 0, 1}, 0.01, *tm+start, 0.6), func(i int) {
 		if i%3 != 2 {
 			return
 		}
-		p.tick()
 		frames++
-		maxStep = max(maxStep, abs32(p.pad[0]-prev))
-		prev = p.pad[0]
-		if firstMove < 0 && p.pad[0] != pad0 {
+		maxStep = max(maxStep, abs32(b.pose.baseY-prev))
+		prev = b.pose.baseY
+		if firstMove < 0 && b.pose.baseY != pad0 {
 			firstMove = float64(frames)*frameS - start
 		}
 	})
-	const px = pongFix / 5
+	const px = boidsFix / fullCellPx
 	if firstMove < 0 || firstMove > 0.25 {
-		t.Errorf("the paddle first moved %.2f s into the move, want within 0.25 s", firstMove)
+		t.Errorf("the window first moved %.2f s into the move, want within 0.25 s", firstMove)
 	}
 	if maxStep > 25*px {
-		t.Errorf("the paddle jumped %d px in one frame, want ≤ 25 (a smooth follow)", maxStep/px)
+		t.Errorf("the window jumped %d px in one frame, want ≤ 25 (a smooth follow)", maxStep/px)
 	}
-	if got, want := float64(pad0-p.pad[0])/px, 0.01*float64(cellsPerM(glassMM))*fullCellPx; got < want*0.85 || got > want*1.15 {
-		t.Errorf("the paddle moved %.0f px for 1 cm, want %.0f (1:1)", got, want)
+	if got, want := float64(pad0-b.pose.baseY)/px, 0.01*float64(cellsPerM(glassMM))*fullCellPx; got < want*0.85 || got > want*1.15 {
+		t.Errorf("the window moved %.0f px for 1 cm, want %.0f (1:1)", got, want)
 	}
 }
 

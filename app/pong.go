@@ -3,6 +3,7 @@ package app
 import (
 	ui "github.com/itohio/tinygui"
 	"image/color"
+	"math"
 	"time"
 
 	"github.com/itohio/tinygui/layout"
@@ -11,8 +12,8 @@ import (
 
 // Pong on a 64×48 LED matrix. Positions are fixed point, 1/256 of a cell
 // (no FPU on the M0+). In the page both paddles are CPU players; full
-// screen the left paddle is yours: it follows the badge as you move it up
-// and down (with an IMU), and UP/DOWN.
+// screen the left paddle is yours: it follows the badge's pitch (with an
+// IMU), and UP/DOWN.
 const (
 	pongW, pongH = 64, 48
 	pongFix      = 256
@@ -24,6 +25,10 @@ const (
 	pongServeVX  = 128
 	pongMaxVX    = 320
 	pongPitch    = 3
+	// your paddle's full travel, bottom to top, is this much pitch around
+	// the neutral latched when PLAY starts (owner 2026-11-15: "30 degrees of
+	// movement", PONG-PITCH-1)
+	pongTiltRange = 30 * math.Pi / 180
 )
 
 var pongLevels = []string{"easy", "normal", "hard"}
@@ -63,8 +68,7 @@ type pong struct {
 	level          int
 	player         bool    // left paddle follows target instead of the CPU
 	motion         *motion // nil without an IMU
-	anchorY        float32 // the badge's displacement along its up axis (m) where the paddle was at anchorPad
-	anchorPad      int32
+	neutral        float32 // the pitch (rad) for your paddle's centre: latched when PLAY starts
 	paused         bool
 	stepUS         int64
 	grid, full     *pongView
@@ -72,15 +76,10 @@ type pong struct {
 	fullOn         bool
 	txt            textBuf
 	log            func(string)
-	// cellsPerM: your paddle follows the badge's displacement along its own
-	// up axis (motion.disp[1]; owner 2026-11-13: "vertical position in the
-	// badge frame of reference, not real world frame of reference") at the
-	// shared motion sensitivity (sens.go), in cells per metre
-	cellsPerM float32
 }
 
 func newPong() *pong {
-	p := &pong{level: 1, cellsPerM: cellsPerM(sensMM[sensDefault])}
+	p := &pong{level: 1}
 	p.pad[0] = (pongH - pongPadLen) / 2 * pongFix
 	p.pad[1] = p.pad[0]
 	p.target = p.pad[0]
@@ -169,7 +168,7 @@ func (p *pong) point(side int) {
 }
 
 func (p *pong) tick() {
-	p.follow() // paused too: your paddle stays with the badge
+	p.follow() // paused too: your paddle stays with the badge's pitch
 	if p.paused {
 		return
 	}
@@ -182,38 +181,21 @@ func (p *pong) tick() {
 	p.stepUS = time.Since(t0).Microseconds()
 }
 
-// follow moves your paddle with the badge's displacement along its own up
-// axis since the anchor, at
-// once (same speed as the badge). At the top or bottom it stops and the
-// anchor moves with the badge, so turning back moves the paddle at once
-// (like a mouse at the screen's edge).
+// follow puts your paddle where the badge's pitch says (owner 2026-11-15,
+// PONG-PITCH-1: "the further i pitch the further the paddle moves"): the
+// centre at the neutral pitch, the full travel over pongTiltRange, clamped
+// beyond. The pitch is the attitude filter's (gravity-referenced: it
+// doesn't drift), the Motion page's: positive tips the top towards you (the
+// screen turns to the floor), which moves the paddle down.
 func (p *pong) follow() {
 	m := p.motion
 	if !p.player || m == nil {
 		return
 	}
-	y := m.disp[1]
-	pad := p.anchorPad - int32((y-p.anchorY)*p.cellsPerM*pongFix) // up the screen is -y
-	if lim := int32((pongH - pongPadLen) * pongFix); pad < 0 || pad > lim {
-		pad = min(max(pad, 0), lim)
-		p.anchor(pad)
-	}
+	const travel = (pongH - pongPadLen) * pongFix
+	pad := int32(travel/2 + (m.rpy[1]-p.neutral)/pongTiltRange*travel)
+	pad = min(max(pad, 0), travel)
 	p.target, p.pad[0] = pad, pad
-}
-
-// anchor ties the paddle position pad to the badge's displacement now.
-func (p *pong) anchor(pad int32) {
-	p.anchorPad = pad
-	if p.motion != nil {
-		p.anchorY = p.motion.disp[1]
-	}
-}
-
-// setScale changes how far your paddle moves per metre of badge motion
-// (cells per metre) from where it is now.
-func (p *pong) setScale(c float32) {
-	p.cellsPerM = c
-	p.anchor(p.target)
 }
 
 func (p *pong) fullView() ui.Widget {
@@ -263,10 +245,14 @@ func (p *pong) glide(b Button, dt time.Duration) {
 }
 
 // moveBy moves your paddle's target by d (cells·pongFix, down positive)
-// within the court; the badge carries on from there.
+// within the court. With the badge's pitch the buttons move the neutral
+// instead, by the pitch d is worth: the paddle steps or glides, and the
+// pitch carries on from there.
 func (p *pong) moveBy(d int32) {
 	p.target = min(max(p.target+d, 0), (pongH-pongPadLen)*pongFix)
-	p.anchor(p.target)
+	if p.player && p.motion != nil {
+		p.neutral -= float32(d) / ((pongH - pongPadLen) * pongFix) * pongTiltRange
+	}
 	p.movePaused()
 }
 
@@ -305,18 +291,22 @@ func (a *App) pagePong() *page {
 // pongHint is the page's line on how to move your paddle.
 func pongHint(imu bool) string {
 	if imu {
-		return "move badge, UP/DN"
+		return "tilt badge, UP/DN"
 	}
 	return "UP/DOWN: paddle"
 }
 
 func (p *pong) tileViews() (ui.Widget, ui.Widget) { return p.tiles[0], p.tiles[1] }
 
-// showFull starts a game against the CPU on the whole screen.
+// showFull starts a game against the CPU on the whole screen; the pitch
+// now is your paddle's centre (owner: "the middle angle is locked when
+// starting the game", as you look at the screen).
 func (p *pong) showFull() {
 	p.fullOn, p.player, p.score = true, true, [2]int{}
 	p.target = p.pad[0]
-	p.anchor(p.pad[0])
+	if p.motion != nil {
+		p.neutral = p.motion.rpy[1]
+	}
 }
 
 func (p *pong) reset() { p.score = [2]int{}; p.serve(1) }

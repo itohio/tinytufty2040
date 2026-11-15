@@ -1,6 +1,7 @@
 package app
 
 import (
+	"math"
 	"testing"
 	"time"
 )
@@ -93,8 +94,7 @@ func TestPaddleTapStepsAndHoldGlides(t *testing.T) {
 		t.Fatal("Pong not full screen")
 	}
 	p := a.pong
-	p.target = 20 * pongFix // mid-court: room both ways
-	p.anchor(p.target)
+	p.target = 20 * pongFix // mid-court: room both ways (with the IMU, the neutral pitch's centre)
 
 	// a tap: down for 100 ms
 	before := p.target
@@ -140,5 +140,91 @@ func TestPaddleTapStepsAndHoldGlides(t *testing.T) {
 	}
 	if p.target != stopped {
 		t.Errorf("released: the paddle kept moving (%.1f cells)", float32(p.target-stopped)/pongFix)
+	}
+}
+
+// pitchFrames holds the badge pitched deg degrees (positive: the top tipping
+// towards you, the Motion page's pitch) for 3 s, still.
+func pitchFrames(a *App, deg float32) {
+	r := float64(deg) * math.Pi / 180
+	acc := [3]float32{0, float32(gravity * math.Cos(r)), float32(-gravity * math.Sin(r))}
+	for range 3 * imuRate {
+		imuFrame(a, acc, [3]float32{}, 1.0/imuRate)
+	}
+	a.pong.tick()
+}
+
+// PONG-PITCH-1 (owner 2026-11-15: "the further i pitch the further the
+// paddle moves ... 30 degrees ... the middle angle is locked when starting
+// the game"): in PLAY your paddle follows the badge's pitch. The pitch PLAY
+// starts at (here 25°) is the centre; the full travel is 30°, ±15° around
+// it, clamped beyond; the top tipping towards you moves the paddle down.
+func TestPongPaddleFollowsPitch(t *testing.T) {
+	a := testApp()
+	a.motion = newMotion()
+	a.pong.motion = a.motion
+	p, m := a.pong, a.motion
+	pitchFrames(a, 25)
+	if got := m.rpy[1] * 180 / math.Pi; got < 24 || got > 26 {
+		t.Fatalf("held at 25°, the pitch reads %.1f° (the test's pose against the Motion page's pitch)", got)
+	}
+	p.showFull()
+	p.tick()
+	cells := func() float32 { return float32(p.pad[0]) / pongFix }
+	if c := cells(); c < 19.9 || c > 20.1 {
+		t.Fatalf("PLAY started at 25°: paddle at %.1f cells, want the centre, 20", c)
+	}
+	for _, c := range []struct{ deg, want float32 }{
+		{-20, 0}, {-15, 0}, {-7.5, 10}, {0, 20}, {7.5, 30}, {15, 40}, {20, 40},
+	} {
+		pitchFrames(a, 25+c.deg)
+		if got := cells(); got < c.want-0.5 || got > c.want+0.5 {
+			t.Errorf("%+.1f° from where PLAY started: paddle at %.1f cells, want %.0f (0 top, 40 bottom)", c.deg, got, c.want)
+		}
+	}
+}
+
+// Held still in the owner's hand (hand model v2), the paddle doesn't
+// jitter: within any second it moves less than a cell (0.75° of pitch). No
+// smoothing: over a minute it follows the hand's real slow tilt (v2: 1.5-1.9°
+// in 60 s, 2.0-2.6 cells of true pitch; the paddle 1.6-2.1), which is the
+// pitch it's meant to follow; smoothing at 0.5 s would only take that to
+// 1.2-1.4 cells for 500 ms of lag (PONG-PITCH-1 evidence).
+func TestPongPitchStillHandKeepsThePaddle(t *testing.T) {
+	for seed := uint64(1); seed <= 3; seed++ {
+		r := newRig()
+		s := newSensor(seed, 0.016, 0.0006, 0, 0)
+		for range 10 * imuRate {
+			a, g := s.sample([3]float64{})
+			r.feed(a, g, 0.01)
+		}
+		accSD, gyroSD, tremA, tremG := noiseOf(hand)
+		s.accSD, s.gyroSD, s.tremA, s.tremG = accSD, gyroSD, tremA, tremG
+		for range 3 * imuRate {
+			a, g := s.sample([3]float64{})
+			r.feed(a, g, 0.01)
+		}
+		p := r.a.pong
+		p.showFull()
+		var last [20]int32 // the paddle over the last second (20 frames)
+		n := 0
+		for i := range 60 * imuRate {
+			a, g := s.sample([3]float64{})
+			r.feed(a, g, 0.01)
+			if i%r.frameN != r.frameN-1 {
+				continue
+			}
+			last[n%len(last)] = p.pad[0]
+			if n++; n < len(last) {
+				continue
+			}
+			lo, hi := last[0], last[0]
+			for _, v := range last {
+				lo, hi = min(lo, v), max(hi, v)
+			}
+			if d := float32(hi-lo) / pongFix; d >= 1 {
+				t.Fatalf("seed %d, %.1f s: the paddle moved %.2f cells within a second, want < 1", seed, float32(i)/imuRate, d)
+			}
+		}
 	}
 }
