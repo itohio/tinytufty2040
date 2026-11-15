@@ -605,3 +605,66 @@ func TestShortStrokeHoldsLongMotionRecentres(t *testing.T) {
 		t.Errorf("6 s of shaking, then 8 s at rest: %.1f cm from where it began, want back within 1 cm", back*100)
 	}
 }
+
+// stillHand is a real still hand's tremor: a quiet stretch of the TG-6
+// pickup capture (in a hand: it turns 0.029 rad/s RMS), its mean removed.
+func stillHand(t *testing.T) (acc, gyr [][3]float32, rate float64) {
+	s, rate := loadCapture(t, "testdata/tg6-pickup.log")
+	w := s[3050:3510]
+	var am, gm [3]float32
+	for _, c := range w {
+		for i := range 3 {
+			am[i] += c.acc[i] / float32(len(w))
+			gm[i] += c.gyr[i] / float32(len(w))
+		}
+	}
+	for _, c := range w {
+		var a, g [3]float32
+		for i := range 3 {
+			a[i], g[i] = c.acc[i]-am[i], c.gyr[i]-gm[i]
+		}
+		acc, gyr = append(acc, a), append(gyr, g)
+	}
+	return acc, gyr, rate
+}
+
+// A short stroke out of a still hand doesn't go back to where it began:
+// held 1.3 s (the A3 hold showing), moved up 5 cm in 0.6 s, then held
+// steady, the shown position stays above 4 cm (80 % of the stroke) for 3 s.
+// A motion is timed from its onset: timed from the hold before it, the
+// stroke counted as a long motion, whose position goes back to where it
+// began. (In a trembling hand the strapdown's own error is larger, ±2 cm:
+// the Kalman cutover's targets.)
+func TestShortStrokeOutOfAHoldDoesNotGoBack(t *testing.T) {
+	ta, tg, rate := stillHand(t)
+	a, tm := motionApp()
+	m := a.motion
+	dt := 1 / rate
+	const d, T, t1 = 0.05, 0.6, 1.3 // the stroke starts after 1.3 s of still hand
+	push := stroke([3]float64{0, 0, 1}, d, *tm+t1, T)
+	x, y, z := badgeAxes(0) // upright: the badge's up is the world's
+	z0 := m.pos[2]
+	held := false
+	for i := 0; float64(i)*dt < t1+T+3; i++ {
+		w := push(*tm + float64(i)*dt)
+		w[2] += gravity
+		el := float64(i) * dt
+		var na, ng [3]float32
+		if el < t1+T { // the hand trembles until the stroke ends, then is steady
+			n := i % len(ta)
+			na, ng = ta[n], tg[n]
+		}
+		imuFrame(a, [3]float32{float32(dot(x, w)) + na[0], float32(dot(y, w)) + na[1], float32(dot(z, w)) + na[2]}, ng, float32(dt))
+		if el < t1 && el+dt >= t1 {
+			held = m.holdFor > 0
+		}
+		if el >= t1+T {
+			if up := float64(m.pos[2]-z0) * 100; up < 4 {
+				t.Fatalf("%.2f s after the stroke ended: shown %.2f cm up, went back below 4 cm", el-t1-T, up)
+			}
+		}
+	}
+	if !held {
+		t.Fatal("the stroke didn't start out of a hold: the test doesn't test it")
+	}
+}

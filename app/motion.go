@@ -416,13 +416,10 @@ func (m *motion) track(q vec.Quaternion, acc [3]float32, dt float32) {
 		// the hold was shorter than the quiet test's response time (two of
 		// its time constants): its lag at a motion's start, or a dip in the
 		// middle of one, not a wake's drift; the strapdown's path through it
-		// is shown, and a motion starting now is timed from the hold's start
+		// is shown. A motion starting now begins below and is timed from its
+		// onset: timed from the hold's start, a short stroke out of a still
+		// hand counted as long, and went back to where it began
 		m.off = m.offHold
-		if m.moveFor == 0 {
-			m.anchor, m.long = m.pos, false
-			m.moveFor = m.holdFor - dt
-			m.trustNav(dt)
-		}
 		if m.moveFor+dt < holdMove { // a long motion never snaps onto the strapdown's path
 			m.followNav()
 		}
