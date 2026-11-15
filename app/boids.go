@@ -33,8 +33,8 @@ const (
 	boidsKSep  = 1.5     // 1/s: separation weight
 	boidsKAli  = 0.6     // 1/s: alignment
 	boidsKCoh  = 0.4     // 1/s: cohesion
-	boidsKOut  = 0.8     // 1/s: the pull toward the view's direction from outside it
-	boidsKIn   = 0.05    // 1/s: … and from inside
+	boidsKOut  = 0.8     // 1/s: outside the view, the pull toward its direction (seek)
+	boidsBand  = 0.3     // inside the view's cone, the border's soft band: the outer 30 % of its angle
 	boidsTrail = 3       // trail palette indices 1..3, heads from 4
 	boidsHist  = 4       // positions kept per boid for the trail
 	boidsHistQ = 127     // the trail's unit vectors as int8 (0.45°: about 2 px at the 60° view)
@@ -72,8 +72,11 @@ type boids struct {
 	stepUS int64
 	// this frame's camera (camera): the view direction, the screen's right
 	// and up, all world unit vectors, and the projection's scale
-	look, right, up [3]int32 // the camera's axes in the world, Q14
-	tanHalf         int32    // tan of half the field across, Q14
+	look, right, up  [3]int32 // the camera's axes in the world, Q14
+	tanHalf          int32    // tan of half the field across, Q14
+	cosView, cosBand int32    // the view's cone and where its border band starts: cos of their angles from the view's direction (Q14)
+	bandPeak         int32    // the band's push at the cone's edge (Q14 rad/s²)
+	free             int      // ticks left in which Scatter's flock flies out: no border band, no seek
 	// the frame's projection, once per tick (Draw runs once per band):
 	// heads and trail points in Q12 of the view's half width (boidsOff: not
 	// in front), the heading's octant
@@ -154,16 +157,30 @@ func q14of(v [3]int32) (q [3]int16) {
 func wide(q [3]int16) [3]int32 { return [3]int32{int32(q[0]), int32(q[1]), int32(q[2])} }
 
 // the Q14 vector maths: |components| ≤ 2^15, so a dot product (Q28) fits
-// int32
-func dotQ(a, b [3]int32) int32 { return (a[0]*b[0] + a[1]*b[1] + a[2]*b[2]) >> 14 }
+// int32. Every shift rounds to the nearest (rsh): a plain >> floors, always
+// toward −∞, and that bias bent every boid's path the same way (the flock
+// went round in circles).
+func rsh(x int32, k uint) int32 { return (x + 1<<(k-1)) >> k }
+
+// divr is x/d rounded to the nearest (d > 0): Go's / truncates toward
+// zero, which shrinks each component on its own and turns a vector toward
+// the axes.
+func divr(x, d int32) int32 {
+	if x < 0 {
+		return -((-x + d/2) / d)
+	}
+	return (x + d/2) / d
+}
+
+func dotQ(a, b [3]int32) int32 { return rsh(a[0]*b[0]+a[1]*b[1]+a[2]*b[2], 14) }
 
 func tangentQ(a, p [3]int32) [3]int32 {
 	d := dotQ(a, p)
-	return [3]int32{a[0] - d*p[0]>>14, a[1] - d*p[1]>>14, a[2] - d*p[2]>>14}
+	return [3]int32{a[0] - rsh(d*p[0], 14), a[1] - rsh(d*p[1], 14), a[2] - rsh(d*p[2], 14)}
 }
 
 func crossQ(a, b [3]int32) [3]int32 {
-	return [3]int32{(a[1]*b[2] - a[2]*b[1]) >> 14, (a[2]*b[0] - a[0]*b[2]) >> 14, (a[0]*b[1] - a[1]*b[0]) >> 14}
+	return [3]int32{rsh(a[1]*b[2]-a[2]*b[1], 14), rsh(a[2]*b[0]-a[0]*b[2], 14), rsh(a[0]*b[1]-a[1]*b[0], 14)}
 }
 
 // lenQ is |a| in Q14 (an integer square root of the Q28 dot product).
@@ -175,7 +192,7 @@ func scaleTo(a [3]int32, l int32) [3]int32 {
 	if n == 0 {
 		return a
 	}
-	return [3]int32{a[0] * l / n, a[1] * l / n, a[2] * l / n}
+	return [3]int32{divr(a[0]*l, n), divr(a[1]*l, n), divr(a[2]*l, n)}
 }
 
 func isqrt(x uint32) uint32 {
@@ -196,7 +213,12 @@ func isqrt(x uint32) uint32 {
 // its up +Y. Without an IMU, or until the attitude has settled, it looks
 // along the world's −Y.
 func (b *boids) camera() {
-	b.tanHalf = int32(math.Tan(float64(boidsFOVs[b.fov])*math.Pi/360)*boidsQ + 0.5)
+	th := math.Tan(float64(boidsFOVs[b.fov]) * math.Pi / 360)
+	b.tanHalf = int32(th*boidsQ + 0.5)
+	r := math.Atan(th * boidsGridH / boidsGridW) // the view's cone: the field across the screen's height
+	b.cosView = int32(math.Cos(r)*boidsQ + 0.5)
+	b.cosBand = int32(math.Cos((1-boidsBand)*r)*boidsQ + 0.5)
+	b.bandPeak = bandPush(boidsBand * r)
 	if m := b.motion; m != nil && m.att.settled {
 		q := m.att.q()
 		b.look = toQ14(toWorld(q, [3]float32{0, 0, -1}))
@@ -219,16 +241,17 @@ func (b *boids) project(p [3]int32) (x, y int32, ok bool) {
 	return (dotQ(p, b.right) << 12) / zt, (dotQ(p, b.up) << 12) / zt, true
 }
 
-// inView reports whether p is on the view: no division.
-func (b *boids) inView(p [3]int32) bool {
-	z := dotQ(p, b.look)
-	if z <= boidsQ/20 {
-		return false
-	}
-	zt := z * b.tanHalf >> 14
-	x, y := dotQ(p, b.right), dotQ(p, b.up)
-	zh := zt * boidsGridH / boidsGridW
-	return x > -zt && x < zt && y > -zh && y < zh
+// inCone reports whether p is in the view's cone: within its angle of the
+// view's direction (the dot product: no screen coordinates).
+func (b *boids) inCone(p [3]int32) bool { return dotQ(p, b.look) > b.cosView }
+
+// pairGap is 1 − cos of the great-circle angle between two boids, Q28:
+// every distance between boids is this angle (neighbours, separation). It
+// is computed as |p − q|²/2, the same number for unit vectors: 1 − p·q
+// itself cancels to a few bits near 1 (±0.1° at the separation's 3°).
+func pairGap(p, q [3]int32) int32 {
+	d0, d1, d2 := p[0]-q[0], p[1]-q[1], p[2]-q[2]
+	return (d0*d0 + d1*d1 + d2*d2) >> 1
 }
 
 // the step's constants in Q14 (lengths, speeds) and Q12 (gains, 1/s),
@@ -240,7 +263,6 @@ var (
 	kAliQ  = roundQ(boidsKAli * gainQ)
 	kCohQ  = roundQ(boidsKCoh * gainQ)
 	kOutQ  = roundQ(boidsKOut * gainQ)
-	kInQ   = roundQ(boidsKIn * gainQ)
 	vMaxQ  = roundQ(boidsVMax * boidsQ)
 	vMinQ  = roundQ(boidsVMin * boidsQ)
 	dtQ16  = roundQ(boidsDT * (1 << 16))
@@ -260,8 +282,8 @@ func roundQ(x float64) int32 { return int32(x + 0.5) }
 // the position on the sphere (a step moves it at most 0.013 rad).
 func (b *boids) step() {
 	n := boidsN[b.count]
-	near2 := int32(2 * (1 - math.Cos(boidsNear)) * boidsQ * boidsQ)
-	sep2 := int32(2 * (1 - math.Cos(boidsSep)) * boidsQ * boidsQ)
+	nearGap := int32((1 - math.Cos(boidsNear)) * boidsQ * boidsQ) // 1 − cos(boidsNear), Q28
+	sepGap := int32((1 - math.Cos(boidsSep)) * boidsQ * boidsQ)   // 1 − cos(boidsSep), Q28
 	for i := range n {
 		pi, vi := wide(b.p[i]), wide(b.v[i])
 		var sepF [3]float32
@@ -271,9 +293,9 @@ func (b *boids) step() {
 			if j == i {
 				continue
 			}
-			d0, d1, d2 := pi[0]-int32(b.p[j][0]), pi[1]-int32(b.p[j][1]), pi[2]-int32(b.p[j][2])
-			c2 := d0*d0 + d1*d1 + d2*d2 // chord², Q28
-			if c2 >= near2 {
+			pj := wide(b.p[j])
+			gap := pairGap(pi, pj) // 1 − cos of their angle on the sphere
+			if gap >= nearGap {
 				continue
 			}
 			k++
@@ -283,47 +305,57 @@ func (b *boids) step() {
 			coh[0] += int32(b.p[j][0])
 			coh[1] += int32(b.p[j][1])
 			coh[2] += int32(b.p[j][2])
-			if c2 < sep2 && c2 > 0 { // close: rare; the push grows as 1/chord², float keeps its range
-				f := float32(sep2) / float32(c2)
-				sepF[0] += float32(d0) * f
-				sepF[1] += float32(d1) * f
-				sepF[2] += float32(d2) * f
+			if gap < sepGap && gap > 0 { // close: rare; the push grows as 1/(1 − cos), float keeps its range
+				f := float32(sepGap) / float32(gap) // away along the great circle: the chord, laid on the tangent plane below
+				sepF[0] += float32(pi[0]-pj[0]) * f
+				sepF[1] += float32(pi[1]-pj[1]) * f
+				sepF[2] += float32(pi[2]-pj[2]) * f
 			}
 		}
 		var s [3]int32 // the steering, Q14 per s
 		if k > 0 {
 			sep := q14clamp(sepF)
 			for a := range 3 {
-				s[a] = (kSepQ*sep[a] + kAliQ*(ali[a]/k-vi[a]) + kCohQ*(coh[a]/k-pi[a])) >> 12
+				s[a] = rsh(kSepQ*sep[a]+kAliQ*(divr(ali[a], k)-vi[a])+kCohQ*(divr(coh[a], k)-pi[a]), 12)
 			}
 		}
-		// the pull toward the view's direction: the boid wants to be seen.
-		// Heading away, it turns (a pull straight back would only slow it to
-		// boidsVMin, and the speed limit keeps a velocity from passing
+		// inside the view: kept off its border by a soft push back inward that
+		// grows across the outer band (nothing in the middle: nothing pulls
+		// a boid along the border). Outside: it seeks the view's direction,
+		// and heading away it turns (a pull straight back would only slow
+		// it to boidsVMin, and the speed limit keeps a velocity from passing
 		// through zero): sideways, toward the side the view is on
-		kv := kInQ
-		if !b.inView(pi) {
-			kv = kOutQ
-		}
-		pull := tangentQ([3]int32{b.look[0] - pi[0], b.look[1] - pi[1], b.look[2] - pi[2]}, pi)
-		for a := range 3 {
-			s[a] += kv * pull[a] >> 12
-		}
-		if dotQ(vi, pull) < 0 {
-			side := crossQ(pi, scaleTo(vi, boidsQ)) // tangent, across the heading
-			if dotQ(side, pull) < 0 {
-				side = [3]int32{-side[0], -side[1], -side[2]}
+		toView := tangentQ([3]int32{b.look[0] - pi[0], b.look[1] - pi[1], b.look[2] - pi[2]}, pi) // along the great circle to the view's direction
+		if c := dotQ(pi, b.look); c > b.cosView {
+			if c < b.cosBand && b.free == 0 { // in the band
+				e := min((b.cosBand-c)*gainQ/(b.cosBand-b.cosView), gainQ) // depth into the band, Q12
+				f := rsh(b.bandPeak*rsh(e*e, 12), 12)                      // Q14 rad/s²
+				d := scaleTo(toView, boidsQ)
+				for a := range 3 {
+					s[a] += rsh(f*d[a], 14)
+				}
 			}
-			kl := kv * lenQ(pull) >> 14 // Q12
+		} else if b.free == 0 { // outside: seek (not while Scatter sends them out)
+			pull := toView
 			for a := range 3 {
-				s[a] += kl * side[a] >> 12
+				s[a] += rsh(kOutQ*pull[a], 12)
+			}
+			if dotQ(vi, pull) < 0 {
+				side := crossQ(pi, scaleTo(vi, boidsQ)) // tangent, across the heading
+				if dotQ(side, pull) < 0 {
+					side = [3]int32{-side[0], -side[1], -side[2]}
+				}
+				kl := rsh(kOutQ*lenQ(pull), 14) // Q12
+				for a := range 3 {
+					s[a] += rsh(kl*side[a], 12)
+				}
 			}
 		}
 		// the velocity is steered in place: later boids see it already
 		// steered, which flocking doesn't mind; the positions all move after
 		acc := tangentQ(s, pi)
 		for a := range 3 {
-			vi[a] += acc[a] * dtQ16 >> 16
+			vi[a] += rsh(acc[a]*dtQ16, 16)
 		}
 		b.v[i] = q14of(tangentQ(vi, pi))
 	}
@@ -339,15 +371,27 @@ func (b *boids) step() {
 		}
 		var q [3]int32
 		for a := range 3 {
-			q[a] = p[a] + v[a]*dtQ16>>16
+			q[a] = p[a] + rsh(v[a]*dtQ16, 16)
 		}
 		// back onto the sphere: q·(3 − |q|²)/2, the factor in Q16
-		f := (3<<28 - (q[0]*q[0] + q[1]*q[1] + q[2]*q[2])) >> 13
+		f := rsh(3<<28-(q[0]*q[0]+q[1]*q[1]+q[2]*q[2]), 13)
 		for a := range 3 {
-			q[a] = q[a] * f >> 16
+			q[a] = rsh(q[a]*f, 16)
 		}
 		b.p[i], b.v[i] = q14of(q), q14of(tangentQ(v, q))
 	}
+}
+
+// bandSafety scales the border band's push over what just stops a boid at
+// full speed heading straight out within the band (a variable: the tests
+// switch it off to see a boid fly free).
+var bandSafety = 1.5
+
+// bandPush is the band's peak push (Q14 rad/s²) for a band w rad wide: a
+// push growing as the square of the depth into the band averages a third of
+// its peak, and stopping boidsVMax within w takes vMax²/2w on average.
+func bandPush(w float64) int32 {
+	return int32(bandSafety*3*boidsVMax*boidsVMax/(2*w)*boidsQ + 0.5)
 }
 
 // q14clamp turns the separation's float sum into Q14 (a sum of chords
@@ -397,6 +441,7 @@ func (b *boids) tick() {
 		}
 	}
 	b.histI = (b.histI + 1) % boidsHist
+	b.free = max(b.free-1, 0)
 	b.frame()
 	b.stepUS = time.Since(t0).Microseconds()
 }
@@ -436,6 +481,16 @@ func randIn() float32 { return float32(rand32()%2048)/1024 - 1 }
 
 // scatter sends every boid away from the view's direction at top speed.
 func (b *boids) scatter() {
+	// the border band and the seek stay off until a boid at full speed has
+	// got past the screen's corner, and half a second more (the cone spans
+	// only the screen's height: past its rim a boid is still on the
+	// screen's sides): the flock flies off the screen,
+	// then the seek brings it back (a fixed 1.5 s, and seeking meanwhile,
+	// kept most of a wide view's flock in: 110° is a 47° cone, 150° a 70°
+	// one)
+	t := float64(b.tanHalf) / boidsQ
+	r := math.Atan(t * math.Hypot(1, boidsGridH/float64(boidsGridW))) // to the screen's corner
+	b.free = int((r/boidsVMax + 0.5) * 30)
 	for i := range boidsN[b.count] {
 		p, look := b.pos(i), floatQ(b.look)
 		d := unit3(tangent([3]float32{p[0] - look[0], p[1] - look[1], p[2] - look[2]}, p))
@@ -480,10 +535,14 @@ func (b *boids) reset() { b.gather() }
 func (b *boids) gather() {
 	b.camera()
 	look, right, up := floatQ(b.look), floatQ(b.right), floatQ(b.up)
-	th := float32(b.tanHalf) / boidsQ
+	cv := float64(b.cosView) / boidsQ
 	for i := range boidsMax {
-		x, y := randIn()*th, randIn()*th*boidsGridH/boidsGridW
-		p := unit3([3]float32{look[0] + x*right[0] + y*up[0], look[1] + x*right[1] + y*up[1], look[2] + x*right[2] + y*up[2]})
+		// uniform over the cone's cap: cos of the angle uniform, the bearing too
+		c := 1 - (float64(randIn())+1)/2*(1-cv)
+		sn := math.Sqrt(1 - c*c)
+		az := float64(randIn()) * math.Pi
+		x, y := float32(sn*math.Cos(az)), float32(sn*math.Sin(az))
+		p := unit3([3]float32{float32(c)*look[0] + x*right[0] + y*up[0], float32(c)*look[1] + x*right[1] + y*up[1], float32(c)*look[2] + x*right[2] + y*up[2]})
 		d := unit3(tangent([3]float32{randIn(), randIn(), randIn()}, p))
 		sp := boidsVMin + (boidsVMax-boidsVMin)*(randIn()+1)/2
 		b.set(i, p, [3]float32{d[0] * sp, d[1] * sp, d[2] * sp})
