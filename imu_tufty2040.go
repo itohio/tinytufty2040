@@ -22,7 +22,7 @@ var (
 	mpuCfg = mpu6050.Config{
 		SampleRateDiv:      9, // 1 kHz / 10 = 100 Hz
 		DLPF:               mpu6050.DLPF44Hz,
-		Accel:              mpu6050.Accel2G,
+		Accel:              mpu6050.Accel8G,     // a hand's shake and taps reach past ±2 g (the M5 capture clipped there)
 		Gyro:               mpu6050.Gyro2000DPS, // ±500 clipped a brisk pick-up (TG-6 capture 0); 0.06 °/s a step, far under the rest thresholds
 		DataReadyInterrupt: true,
 
@@ -60,10 +60,12 @@ func setupIMU() bool {
 		return false
 	}
 	mpu = d
-	var gc [1]byte // GYRO_CONFIG read back: FS_SEL in bits 4:3 (3 = ±2000 °/s)
+	// the ranges as read back from the sensor: AFS_SEL and FS_SEL in bits 4:3
+	var ac, gc [1]byte
+	_ = mpuRead(regAccelConfig, ac[:])
 	_ = mpuRead(regGyroConfig, gc[:])
 	var l console.Line
-	l.S("imu: MPU6050 at 0x68, 100 Hz, DLPF 44 Hz, ±2 g, ±2000 °/s (GYRO_CONFIG").U(uint64(gc[0])).S("): gravity from the tilt").Send(&con)
+	l.S("imu: MPU6050 at 0x68, 100 Hz, DLPF 44 Hz, full scale").U(uint64(2) << (ac[0] >> 3 & 3)).S("g and").U(uint64(250) << (gc[0] >> 3 & 3)).S("°/s: gravity from the tilt").Send(&con)
 	return true
 }
 
@@ -107,16 +109,17 @@ func i2cRecover(sda, scl machine.Pin) {
 // hold 0.85 s. The driver (EasyRobot x/devices/mpu6050) has no FIFO API
 // yet: these registers are read directly on its bus.
 const (
-	mpuAddr       = 0x68
-	regGyroConfig = 0x1B // GYRO_CONFIG: FS_SEL in bits 4:3
-	regFIFOEn     = 0x23 // FIFO_EN: which outputs go into the FIFO
-	regIntStatus  = 0x3A // INT_STATUS: bit 4 FIFO_OFLOW_INT
-	regUserCtrl   = 0x6A // USER_CTRL: bit 6 FIFO_EN, bit 2 FIFO_RESET
-	regFIFOCount  = 0x72 // FIFO_COUNT_H, _L
-	regFIFORW     = 0x74 // FIFO_R_W
-	fifoAccGyro   = 0x78 // XG, YG, ZG, ACCEL
-	fifoSample    = mpufifo.Sample
-	fifoBatch     = 10 // samples per burst read
+	mpuAddr        = 0x68
+	regGyroConfig  = 0x1B // GYRO_CONFIG: FS_SEL in bits 4:3
+	regAccelConfig = 0x1C // ACCEL_CONFIG: AFS_SEL in bits 4:3
+	regFIFOEn      = 0x23 // FIFO_EN: which outputs go into the FIFO
+	regIntStatus   = 0x3A // INT_STATUS: bit 4 FIFO_OFLOW_INT
+	regUserCtrl    = 0x6A // USER_CTRL: bit 6 FIFO_EN, bit 2 FIFO_RESET
+	regFIFOCount   = 0x72 // FIFO_COUNT_H, _L
+	regFIFORW      = 0x74 // FIFO_R_W
+	fifoAccGyro    = 0x78 // XG, YG, ZG, ACCEL
+	fifoSample     = mpufifo.Sample
+	fifoBatch      = 10 // samples per burst read
 )
 
 var (

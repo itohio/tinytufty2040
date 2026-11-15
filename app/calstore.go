@@ -24,10 +24,10 @@ type CalStore interface {
 	Erase() error         // forget it
 }
 
-// The sensor's ranges as the firmware sets them (imu_tufty2040.go: ±2 g,
-// ±2000 °/s): a record made at other ranges isn't used.
+// The sensor's ranges as the firmware sets them (imu_tufty2040.go: ±8 g,
+// ±2000 °/s): a record made at other ranges (an older ±2 g one) isn't used.
 const (
-	AccelFullScale = 2 * gravity
+	AccelFullScale = 8 * gravity
 	GyroFullScale  = 2000 * math.Pi / 180
 )
 

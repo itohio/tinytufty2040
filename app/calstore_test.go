@@ -50,8 +50,8 @@ func TestCalRecordRoundTripAndRefusals(t *testing.T) {
 	if _, err := decodeCalRecord(&old, AccelFullScale, GyroFullScale); err == nil {
 		t.Fatal("another version was taken")
 	}
-	if _, err := decodeCalRecord(&b, 8*gravity, GyroFullScale); err == nil {
-		t.Fatal("a record made at another accelerometer range was taken")
+	if _, err := decodeCalRecord(&b, 2*gravity, GyroFullScale); err == nil {
+		t.Fatal("a record made at another accelerometer range (±2 g) was taken")
 	}
 	var erased [calRecordSize]byte
 	for i := range erased {
@@ -86,10 +86,10 @@ func TestSavedCalibrationIsUsedAtBoot(t *testing.T) {
 		t.Fatalf("the saved fit doesn't correct the samples: %v → %v", raw, c)
 	}
 	other := &ramStore{saved: true}
-	encodeCalRecord(&other.b, &ownerFit, 4*gravity, GyroFullScale)
+	encodeCalRecord(&other.b, &ownerFit, 2*gravity, GyroFullScale)
 	b, lines := storeApp(other)
 	if b.calib.g.inUse {
-		t.Fatal("a calibration made at ±4 g was put in use at ±2 g")
+		t.Fatal("a calibration made at ±2 g was put in use at ±8 g")
 	}
 	if !strings.Contains(strings.Join(lines, "\n"), "cal: saved one not used: made at another range") {
 		t.Fatalf("not said why the saved one isn't used: %q", lines)
@@ -184,7 +184,7 @@ func TestCalSaysWhatIsSaved(t *testing.T) {
 		t.Fatalf("after cal clear: %q", out)
 	}
 	other := &ramStore{saved: true}
-	encodeCalRecord(&other.b, &ownerFit, 8*gravity, GyroFullScale)
+	encodeCalRecord(&other.b, &ownerFit, 2*gravity, GyroFullScale)
 	b, _ := storeApp(other)
 	if out := run(b, ""); !strings.Contains(out, "cal saved: not used: made at another range") {
 		t.Fatalf("another range at boot: %q", out)
