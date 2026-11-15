@@ -18,12 +18,13 @@ type command struct {
 }
 
 // helpLines lists the commands in lines that fit a log line (logLineLen):
-// one long line was cut off after `led`.
+// a longer one is cut at logLineLen (TestHelpLinesFitTheLogLine).
 var helpLines = [...]string{
 	"commands: up|down|a|b|c [long], user <ms>, page <n|name>",
 	"led <0-100>, bl <10-100>, saver [0|1], solid [0-255]",
-	"stats, tiles, frames, mem, memshow [0|1], light [raw|-1], tilt, motion",
-	"sens [2.5|5|10|20|40]: motion sensitivity, 1 px = N mm; dump, version, help",
+	"stats, tiles, frames, mem, memshow [0|1]",
+	"light [raw|-1], tilt, motion, dump, version, help",
+	"sens [2.5|5|10|20|40]: 1 px = N mm of motion",
 	"cal: the calibration fit and its orientations' poses",
 }
 
