@@ -118,6 +118,7 @@ type guided struct {
 	fitSt  gFit
 	fit    calib.Fit // the fit shown
 	inUse  bool      // a fit corrects the samples
+	saved  bool      // the fit in use is the saved one (App.setCalSaved)
 	fitN   int       // fits solved so far (App.Update logs each new one: calReport)
 	use    calib.Fit // the fit in use (a new fit is only shown until A)
 	txt    [12]textBuf
@@ -339,6 +340,7 @@ const (
 	gGyroSetText   = "gyro: set"
 	gUseText       = "A: use it   B: discard"
 	gInUseText     = "in use until power-off"
+	gSavedText     = "in use and saved"
 	gNeedAxesText  = "fit: needs 3 on different axes"
 	gNeedBothText  = "scale: needs each axis both ways"
 )
@@ -488,11 +490,23 @@ func (v *calibView) guidedPanel(d drivers.Displayer, x0, y int16) {
 		panelLine(d, x, y, line, gNeedBothText, colMuted)
 	}
 	line++
-	hint, hc := gUseText, calThr
+	hint := g.useHint()
+	hc := calThr
 	if g.fitSt == fitInUse {
-		hint, hc = gInUseText, calOK
+		hc = calOK
 	}
 	panelLine(d, x, y, line, hint, hc)
+}
+
+// useHint is the fit panel's last line: what A does, or that it is in use.
+func (g *guided) useHint() string {
+	switch {
+	case g.fitSt == fitInUse && g.saved:
+		return gSavedText
+	case g.fitSt == fitInUse:
+		return gInUseText
+	}
+	return gUseText
 }
 
 // cell draws one table cell: line i of the panel at x.

@@ -351,8 +351,8 @@ func TestOrientationsRefuseAMovingPose(t *testing.T) {
 }
 
 // A on a fit uses it: from then the accelerometer samples the motion state
-// gets are corrected (until power-off); B instead drops it and they stay
-// raw, and the page stays.
+// gets are corrected (across power-off only if saved); B instead drops it
+// and they stay raw, and the page stays.
 func TestOrientationFitUseCorrectsAndDiscardDoesNot(t *testing.T) {
 	off := [3]float32{0.2, -0.1, 0.3}
 	raw := [3]float32{off[0], gravity + off[1], off[2]} // upright, still

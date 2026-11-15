@@ -190,3 +190,50 @@ func TestCalSaysWhatIsSaved(t *testing.T) {
 		t.Fatalf("another range at boot: %q", out)
 	}
 }
+
+// What the badge says about saving follows the fit in use: with a record
+// saved, an offsets-only fit put in use isn't saved, so neither cal nor the
+// page may call it saved; a full fit put in use is saved, and both say so.
+func TestOnlyASavedFitIsCalledSaved(t *testing.T) {
+	off := [3]float32{0.12, -0.25, 0.31}
+	sc := [3]float32{1.02, 0.97, 1.01}
+	a, c, wait := orientApp(t)
+	st := &ramStore{}
+	a.calStore = st
+	var lines []string
+	a.cfg.Log = func(s string) { lines = append(lines, strings.Clone(s)) }
+	savedLine := func() string {
+		lines = lines[:0]
+		a.Command("cal", "")
+		a.Update(a.now) // the log reaches Config.Log here
+		for _, l := range lines {
+			if strings.HasPrefix(l, "cal saved:") {
+				return l
+			}
+		}
+		return ""
+	}
+	use := func(faces ...calFace) {
+		for _, f := range faces {
+			choose(t, a, f)
+			measure(c, wait, f, off, sc, [3]float32{})
+		}
+		a.Press(BtnA, false)
+		wait(100 * time.Millisecond)
+	}
+	use(0, 1, 2, 3, 4, 5)
+	if l, h := savedLine(), a.calib.g.useHint(); l != "cal saved: in use" || h != gSavedText {
+		t.Fatalf("a full fit in use: %q, page %q; want saved", l, h)
+	}
+	a.Press(BtnB, false) // leave the finished set; start a new one
+	wait(100 * time.Millisecond)
+	a.Press(BtnA, false)
+	a.Press(BtnA, false)
+	use(faceUp, faceUpright, faceArrows) // offsets only: not saved
+	if !st.saved {
+		t.Fatal("the saved record is gone")
+	}
+	if l, h := savedLine(), a.calib.g.useHint(); l != "cal saved: not used: a newer fit is in use" || h != gInUseText {
+		t.Fatalf("an offsets-only fit in use over a saved one: %q, page %q", l, h)
+	}
+}

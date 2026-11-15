@@ -111,7 +111,25 @@ const (
 	calSavedNone   calSavedState = iota // nothing saved (or erased)
 	calSavedInUse                       // the saved calibration is the one in use
 	calSavedUnused                      // one is saved but not used (calSavedErr says why)
+	calSavedOther                       // one is saved, but a newer fit (not saved) is in use
 )
+
+// setCalSaved records what the store holds; the Calibration page says
+// "saved" only while the fit in use is the saved one.
+func (a *App) setCalSaved(st calSavedState, err error) {
+	a.calSaved, a.calSavedErr = st, err
+	if a.calib != nil {
+		a.calib.g.saved = st == calSavedInUse
+	}
+}
+
+// calNewFitInUse notes that a fit other than the saved one went into use
+// (A on a fit, cal set): until it is saved, the saved one isn't in use.
+func (a *App) calNewFitInUse() {
+	if a.calSaved == calSavedInUse {
+		a.setCalSaved(calSavedOther, nil)
+	}
+}
 
 // calSavedLine logs what is saved: the boot line comes before a host
 // connects, so cal says it again.
@@ -121,6 +139,8 @@ func (a *App) calSavedLine() {
 		a.log("cal saved: nowhere (no store)")
 	case a.calSaved == calSavedInUse:
 		a.log("cal saved: in use")
+	case a.calSaved == calSavedOther:
+		a.log("cal saved: not used: a newer fit is in use")
 	case a.calSaved == calSavedUnused && a.calSavedErr != nil:
 		a.log2("cal saved: not used: ", a.calSavedErr.Error())
 	default:
@@ -135,23 +155,23 @@ func (a *App) calLoad() {
 		return
 	}
 	if err := a.calStore.Read(a.calRec[:]); err != nil {
-		a.calSaved, a.calSavedErr = calSavedUnused, err
+		a.setCalSaved(calSavedUnused, err)
 		a.log2("cal: can't read the saved calibration: ", err.Error())
 		return
 	}
 	f, err := decodeCalRecord(&a.calRec, AccelFullScale, GyroFullScale)
 	if err == errCalNone {
-		a.calSaved = calSavedNone
+		a.setCalSaved(calSavedNone, nil)
 		a.log("cal: no saved calibration")
 		return
 	}
 	if err != nil {
-		a.calSaved, a.calSavedErr = calSavedUnused, err
+		a.setCalSaved(calSavedUnused, err)
 		a.log2("cal: saved one not used: ", err.Error())
 		return
 	}
 	a.calib.putInUse(f)
-	a.calSaved = calSavedInUse
+	a.setCalSaved(calSavedInUse, nil)
 	a.log2("cal: the saved calibration is in use: ", f.Model.String())
 }
 
@@ -165,7 +185,7 @@ func (a *App) calSave() {
 		a.log2("cal: not saved: ", err.Error())
 		return
 	}
-	a.calSaved = calSavedInUse
+	a.setCalSaved(calSavedInUse, nil)
 	a.log("cal: saved")
 }
 
@@ -185,7 +205,7 @@ func (a *App) calCommand(arg string) {
 			a.log2("cal clear: ", err.Error())
 			return
 		}
-		a.calSaved = calSavedNone
+		a.setCalSaved(calSavedNone, nil)
 		a.log("cal: saved calibration erased")
 	case len(arg) > 4 && arg[:4] == "set ":
 		a.calSetCommand(arg[4:])
@@ -238,6 +258,7 @@ func (a *App) calSetCommand(s string) {
 		}
 	}
 	a.calib.putInUse(f)
+	a.calNewFitInUse()
 	a.log("cal set: in use")
 	a.calSave()
 }
