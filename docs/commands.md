@@ -32,7 +32,7 @@ Same meaning on every page (owner 2026-11-12: "up and down … A, B, and C … s
 | `b` / `b long` | cancel an edit (revert), or leave the list | B (on release) | |
 | `c` / `c long` | next page (`long`: previous page); cancels an edit first | C (on release) | |
 | `user <ms>` | report a USER hold of `<ms>`; > 1000 ms toggles the screensaver | USER/BOOT held (measured by `ui.PeekButton`, the loop pauses while it is down) | |
-| `page <n>` | jump to page `n` (0 Demos, 1 Dash, 2 Gauge, 3 Ctrl, 4 Image, 5 Flow, 6 List, 7 Log, 8 Life, 9 Water, 10 Fire, 11 Pong, 12 Boids) | — | |
+| `page <n\|name>` | jump to page `n`, or to the page of that name in any case (`page pong`). With an IMU: 0 Calib, 1 Demos, 2 Dash, 3 Gauge, 4 Ctrl, 5 Image, 6 Flow, 7 List, 8 Log, 9 Life, 10 Water, 11 Fire, 12 Pong, 13 Boids, 14 Motion; without one the indices shift down by one and Motion is absent. Anything else leaves the page as it is and logs `page: a number 0-N or a page name` | — | |
 | `led <0-100>` | user LED brightness (0 = off) | — (Ctrl page: User LED, LED level) | |
 | `bl <10-100>` | backlight brightness; **100 is DC** (pin driven high, no PWM: no stripes in camera photos), below 100 a 200 kHz PWM; the default is 100 on USB power, 80 on battery | — (Ctrl page: Backlight) | |
 | `saver` / `saver 1` / `saver 0` | toggle / switch on / switch off the screensaver (`RandomContext` burn-in shift) | USER hold > 1 s toggles | any button press leaves it |

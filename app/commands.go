@@ -11,6 +11,7 @@ import (
 
 type command struct {
 	name   string
+	text   string // the argument as sent (page takes a name)
 	arg    int
 	hasArg bool
 	long   bool
@@ -19,7 +20,7 @@ type command struct {
 // helpLines lists the commands in lines that fit a log line (logLineLen):
 // one long line was cut off after `led`.
 var helpLines = [...]string{
-	"commands: up|down|a|b|c [long], user <ms>, page <n>",
+	"commands: up|down|a|b|c [long], user <ms>, page <n|name>",
 	"led <0-100>, bl <10-100>, saver [0|1], solid [0-255]",
 	"stats, tiles, frames, mem, memshow [0|1], light [raw|-1], tilt, motion",
 	"sens [2.5|5|10|20|40]: motion sensitivity, 1 px = N mm; dump, version, help",
@@ -36,7 +37,7 @@ func (a *App) Handlers() map[string]func([]byte) {
 
 // Command queues one console command (safe to call from another goroutine).
 func (a *App) Command(name, arg string) {
-	c := command{name: name, long: arg == "long"}
+	c := command{name: name, text: arg, long: arg == "long"}
 	c.arg, c.hasArg = atoi(arg)
 	if name == "sens" && arg != "" { // a choice, 2.5 isn't an int: the index, -1 for none
 		c.arg, c.hasArg = sensArg(arg), true
@@ -61,9 +62,11 @@ func (a *App) exec(c command) {
 		a.Press(BtnC, c.long)
 	case "user":
 		a.UserHold(time.Duration(c.arg) * time.Millisecond)
-	case "page":
-		if c.arg >= 0 && c.arg < a.pages.Count() {
-			a.showPage(c.arg)
+	case "page": // an index or a page's name; anything else stays and says so
+		if i := a.pageArg(c); i >= 0 {
+			a.showPage(i)
+		} else {
+			a.log(a.txtStat.reset().str("page: a number 0-").int(a.pages.Count() - 1).str(" or a page name").String())
 		}
 	case "led":
 		a.ledOn, a.ledPct = c.arg > 0, clampi(c.arg, 0, 100)
@@ -130,6 +133,44 @@ func (a *App) exec(c command) {
 			a.log(l)
 		}
 	}
+}
+
+// pageArg is the page a page command names: its index, or a page's name
+// in any case; -1 for neither.
+func (a *App) pageArg(c command) int {
+	if c.hasArg {
+		if c.arg >= 0 && c.arg < a.pages.Count() {
+			return c.arg
+		}
+		return -1
+	}
+	for i := range a.pages.Count() {
+		if c.text != "" && asciiFold(a.pages.Name(i), c.text) {
+			return i
+		}
+	}
+	return -1
+}
+
+// asciiFold reports whether a and b match ignoring ASCII case (page names
+// are ASCII; strings.EqualFold brings Unicode tables: 8 KB of flash).
+func asciiFold(a, b string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := 0; i < len(a); i++ {
+		x, y := a[i], b[i]
+		if x >= 'A' && x <= 'Z' {
+			x += 'a' - 'A'
+		}
+		if y >= 'A' && y <= 'Z' {
+			y += 'a' - 'A'
+		}
+		if x != y {
+			return false
+		}
+	}
+	return true
 }
 
 func atoi(s string) (int, bool) {
